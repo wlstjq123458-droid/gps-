@@ -42,11 +42,7 @@
   --radius-lg: 26px;
 }
 
-/* Naver Version Mode Modifier */
-body.naver-mode {
-  --border-focus: var(--naver-green);
-  --primary-gradient: var(--naver-gradient);
-}
+
 
 /* Reset & Base Styles */
 * {
@@ -773,25 +769,12 @@ body.naver-mode .preset-pill:hover {
   pointer-events: none;
 }
 
-/* Customize Leaflet default style elements to fit dark mode */
-.leaflet-popup-content-wrapper, .leaflet-popup-tip {
-  background: rgba(15, 23, 42, 0.95) !important;
-  backdrop-filter: blur(10px);
-  color: var(--text-main) !important;
-  border: 1px solid var(--border-focus) !important;
-  box-shadow: var(--shadow-lg) !important;
-  border-radius: var(--radius-sm) !important;
-}
-
-.leaflet-popup-content {
+/* Kakao Maps InfoWindow 코어 스타일 오버라이드 */
+.kakao-maps-infowindow {
   font-family: var(--font-main) !important;
   font-size: 0.85rem;
-  margin: 12px 14px !important;
   line-height: 1.4;
-}
-
-.leaflet-container a {
-  color: var(--border-focus) !important;
+  color: var(--text-main);
 }
 
 /* List Operations Bar */
@@ -1477,29 +1460,34 @@ body.naver-mode .restaurant-card.highlight {
 }
 
 .toast {
-  background: rgba(15, 23, 42, 0.95);
+  background: rgba(255, 255, 255, 0.98);
   backdrop-filter: blur(12px);
-  border: 1px solid var(--border-color);
+  border: 1px solid rgba(15, 23, 42, 0.12);
   border-radius: var(--radius-md);
-  padding: 10px 18px;
+  padding: 12px 20px;
   font-size: 0.85rem;
-  color: var(--text-main);
+  color: #0f172a; /* 어두운 글자색 */
   display: flex;
   align-items: center;
   gap: 8px;
   white-space: nowrap;
   animation: toastIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
-  box-shadow: var(--shadow-md);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
 }
 
 .toast.lock-toast {
-  border-color: rgba(244, 63, 94, 0.4);
-  color: #fda4af;
+  border-left: 4px solid var(--coral-accent);
+  color: var(--coral-accent);
 }
 
 .toast.unlock-toast {
-  border-color: rgba(99, 102, 241, 0.4);
-  color: #a5b4fc;
+  border-left: 4px solid var(--border-focus);
+  color: var(--border-focus);
+}
+
+.toast.success-toast {
+  border-left: 4px solid #10b981;
+  color: #10b981;
 }
 
 .toast.fadeout {

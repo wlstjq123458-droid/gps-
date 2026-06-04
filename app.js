@@ -1,10 +1,10 @@
 /**
  * 가까운 맛집 탐색기 (GPS 기반 주변 음식점 추천)
  * Application Logic - app.js
- * - 버전1(시뮬레이션) 완전 제거
- * - 데모 모드 버튼 제거
- * - 네이버 API로 현재 좌표 기반 실제 음식점 검색
- * - GPS 실패 시 기본값: 부산 동서대학교 (35.1457, 129.0072)
+ * - 네이버 API 및 Leaflet 지도 완전 제거
+ * - 카카오 지도 JS SDK 및 로컬/서비스 API 기반 구현
+ * - 더미 데이터(Mock Data) 기능 완전 제거 (실제 카카오 데이터만 사용)
+ * - 하얗고 깔끔한 디자인의 마커 알림창(InfoWindow) 및 토스트 알림 적용
  */
 
 // ============================================================
@@ -43,25 +43,9 @@ const categoryMetadata = {
 };
 
 // ============================================================
-// 폴백용 가상 음식점 이름 (API 실패 시 사용)
-// ============================================================
-const mockRestaurantNames = {
-  '한식': ['부산깡통시장 돼지국밥', '동래 할매파전', '기장 미역 칼국수', '남포동 밀면', '서면 돼지갈비', '해운대 어묵', '광안리 회덮밥', '부산진 설렁탕', '사상 쌈밥', '주례 된장찌개'],
-  '중식': ['부산 짜장면', '사상구 짬뽕', '동서대 앞 중화요리', '경화루 부산점', '홍콩반점 서면점', '차이나타운 딤섬', '사상 마라탕', '양꼬치 서면', '딩딤 부산', '취영루 부산'],
-  '일식': ['부산 초밥', '해운대 라멘', '광안리 우동', '동서대 돈까스', '사상 일식', '서면 스시', '남포 이자카야', '부산 텐동', '기장 회', '해운대 오마카세'],
-  '분식': ['사상 떡볶이', '주례 김밥', '동서대 분식', '엽기떡볶이 서면', '죠스떡볶이 사상', '꼬마김밥 부산', '순대국 사상', '만두 부산', '청년다방 사상', '신전떡볶이 부산'],
-  '치킨': ['교촌치킨 사상점', 'BBQ 주례점', 'bhc 서면점', '굽네치킨 부산', '네네치킨 사상', '페리카나 부산', '처갓집 사상', '호치킨 부산', '자담치킨 서면', '푸라닭 부산'],
-  '피자': ['도미노 사상점', '피자헛 서면', '미스터피자 부산', '파파존스 부산', '피자스쿨 사상', '피자마루 부산', '부산 화덕피자', '피자알볼로 서면', '59쌀피자 부산', '잭슨피자 부산'],
-  '햄버거': ['맥도날드 사상점', '버거킹 서면점', '롯데리아 부산', '맘스터치 사상', 'KFC 서면', '쉑쉑버거 부산', '노브랜드버거 부산', '바스버거 서면', '다운타우너 부산', '프랭크버거 사상']
-};
-
-// ============================================================
 // 2. DOM 요소 선택
 // ============================================================
 const DOM = {
-  naverClientId: document.getElementById('naver-client-id'),
-  naverClientSecret: document.getElementById('naver-client-secret'),
-  
   btnGetLocation: document.getElementById('btn-get-location'),
   btnLockLocation: document.getElementById('btn-lock-location'),
   lockIcon: document.getElementById('lock-icon'),
@@ -93,93 +77,170 @@ const DOM = {
   listLoadingState: document.getElementById('list-loading-state'),
   restaurantCardsFeed: document.getElementById('restaurant-cards-feed'),
   
-  btnAdminLogin: document.getElementById('btn-admin-login'),
-  adminModal: document.getElementById('admin-modal'),
-  btnCloseAdminModal: document.getElementById('btn-close-admin-modal'),
-  btnSubmitAdmin: document.getElementById('btn-submit-admin'),
-  adminPasswordInput: document.getElementById('admin-password-input'),
-  naverSettings: document.getElementById('naver-settings'),
   inputAddress: document.getElementById('input-address'),
   btnSearchAddress: document.getElementById('btn-search-address')
 };
+
+// 전역 정보창 객체 (하나만 띄우기 위해 유지)
+let activeInfoWindow = null;
 
 // ============================================================
 // 3. 앱 초기화
 // ============================================================
 document.addEventListener('DOMContentLoaded', () => {
-  initMap();
-  loadPresets();
-  loadFavoriteRestaurants();
-  setupEventListeners();
-  renderNaverUsageUI();
-  
-  // 관리자 인증 여부 복구
-  if (sessionStorage.getItem('isAdminAuthenticated') === 'true') {
-    if (DOM.naverSettings) DOM.naverSettings.classList.remove('hidden');
+  // file:// 프로토콜 체크 (로컬 파일 직접 열기 시 SDK 동작 불가)
+  if (window.location.protocol === 'file:') {
+    showSDKErrorUI('file');
+    return;
   }
-  
-  // 기본 카테고리: 한식 + 일식 선택
-  state.selectedCategories.add('한식');
-  state.selectedCategories.add('일식');
-  updateCategoryChipsUI();
+
+  // SDK 스크립트 로드 실패 감지 (onerror 플래그)
+  if (window.__kakaoScriptFailed || typeof kakao === 'undefined') {
+    showSDKErrorUI('domain');
+    return;
+  }
+
+  // kakao.maps.load() 콜백 안에서 안전하게 지도 초기화
+  kakao.maps.load(() => {
+    initMap();
+    loadPresets();
+    loadFavoriteRestaurants();
+    setupEventListeners();
+
+    // 기본 카테고리: 한식 + 일식 선택
+    state.selectedCategories.add('한식');
+    state.selectedCategories.add('일식');
+    updateCategoryChipsUI();
+  });
 });
 
 // ============================================================
-// 지도 초기화
+// SDK 로드 실패 시 안내 UI 표시
+// ============================================================
+function showSDKErrorUI(reason) {
+  const isFile = reason === 'file';
+
+  // 지도 영역에 안내 UI 렌더링
+  const mapCard = document.querySelector('.map-card');
+  const mapEl = document.getElementById('map');
+  if (mapCard && mapEl) {
+    mapCard.style.background = '#fffbeb';
+    mapCard.style.display = 'flex';
+    mapCard.style.alignItems = 'center';
+    mapCard.style.justifyContent = 'center';
+    mapEl.style.display = 'none';
+
+    const guide = document.createElement('div');
+    guide.style.cssText = 'display:flex;flex-direction:column;align-items:center;text-align:center;gap:14px;padding:24px;font-family:"Noto Sans KR",sans-serif;max-width:440px;width:100%;';
+    guide.innerHTML = `
+      <div style="font-size:3rem;">🗺️</div>
+      <h3 style="font-size:1.05rem;font-weight:700;color:#b45309;margin:0;">카카오 지도 SDK 로드 실패</h3>
+      ${isFile ? `
+      <div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:10px;padding:14px 18px;text-align:left;width:100%;font-size:0.8rem;color:#78350f;line-height:1.8;">
+        <b>⚠️ 파일을 직접 열었습니다 (file:// 방식)</b><br>
+        카카오 SDK는 <code style="background:#fee2e2;padding:1px 5px;border-radius:4px;font-size:0.75rem;">file://</code> 환경에서 동작하지 않습니다.<br><br>
+        <b>해결 방법 — 터미널에서 아래 명령어 실행:</b>
+        <div style="background:#1e293b;color:#10b981;padding:8px 12px;border-radius:6px;margin-top:8px;font-family:monospace;font-size:0.82rem;">
+          npm run build &amp;&amp; npm start
+        </div>
+        그 후 브라우저에서 <b>http://localhost:8080</b> 접속
+      </div>
+      ` : `
+      <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:10px;padding:14px 18px;text-align:left;width:100%;font-size:0.8rem;color:#166534;line-height:1.8;">
+        <b>📋 카카오 개발자 콘솔 도메인 등록 방법:</b>
+        <ol style="padding-left:18px;margin:8px 0 0;">
+          <li>🌐 <a href="https://developers.kakao.com" target="_blank" style="color:#16a34a;">developers.kakao.com</a> 접속</li>
+          <li>내 애플리케이션 → 앱 선택</li>
+          <li>앱 설정 → 플랫폼 → <b>Web</b> 클릭</li>
+          <li>사이트 도메인에 아래 주소 추가:<br>
+            <code style="background:#dcfce7;padding:2px 6px;border-radius:4px;">http://localhost</code>&nbsp;
+            <code style="background:#dcfce7;padding:2px 6px;border-radius:4px;">http://localhost:8080</code>
+          </li>
+          <li>저장 후 페이지 새로고침</li>
+        </ol>
+      </div>
+      `}
+    `;
+    mapCard.appendChild(guide);
+  }
+
+  // 버튼 비활성화
+  if (DOM.btnGetLocation) {
+    DOM.btnGetLocation.disabled = true;
+    DOM.btnGetLocation.style.opacity = '0.5';
+    DOM.btnGetLocation.style.cursor = 'not-allowed';
+  }
+  if (DOM.btnLockLocation) {
+    DOM.btnLockLocation.disabled = true;
+    DOM.btnLockLocation.style.opacity = '0.5';
+  }
+
+  // 상태 텍스트 업데이트
+  if (DOM.geoStatusText) {
+    DOM.geoStatusText.className = 'geo-status error';
+    DOM.geoStatusText.innerHTML = isFile
+      ? '<i class="fa-solid fa-triangle-exclamation"></i> file:// 방식 불가 — npm run build &amp;&amp; npm start 실행 필요'
+      : '<i class="fa-solid fa-circle-xmark"></i> 카카오 SDK 로드 실패 — 도메인 등록 확인 필요';
+  }
+
+  console.error('[App] 카카오 SDK 초기화 실패. 원인:', isFile ? 'file:// 프로토콜' : '도메인 미등록 또는 네트워크 오류');
+}
+
+// ============================================================
+// 카카오 지도 초기화
 // ============================================================
 function initMap() {
-  state.map = L.map('map', {
-    zoomControl: true,
-    attributionControl: false
-  }).setView([state.currentCoords.lat, state.currentCoords.lng], 15);
-
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-    maxZoom: 19
-  }).addTo(state.map);
-
-  const userIcon = L.divIcon({
-    className: 'custom-user-marker',
-    html: `<div class="pulse-marker"></div><div class="center-marker"></div>`,
-    iconSize: [24, 24],
-    iconAnchor: [12, 12]
-  });
+  const container = document.getElementById('map');
+  const centerPosition = new kakao.maps.LatLng(state.currentCoords.lat, state.currentCoords.lng);
   
-  state.userMarker = L.marker([state.currentCoords.lat, state.currentCoords.lng], { 
-    icon: userIcon,
-    draggable: true 
-  })
-    .addTo(state.map)
-    .bindPopup('<b>기준 위치 (드래그 가능)</b><br>핀을 드래그하거나 지도를 클릭해 위치를 변경하세요.')
-    .openPopup();
+  const options = {
+    center: centerPosition,
+    level: 4 // 지도 줌 레벨
+  };
 
-  state.userMarker.on('dragend', function(event) {
-    if (state.isLocationLocked) return;
-    const pos = event.target.getLatLng();
-    updateLocationCoords(pos.lat, pos.lng, false);
+  // 지도 생성
+  state.map = new kakao.maps.Map(container, options);
+  
+  // 지도 컨트롤 추가 (줌 컨트롤)
+  const zoomControl = new kakao.maps.ZoomControl();
+  state.map.addControl(zoomControl, kakao.maps.ControlPosition.RIGHT);
+
+  // 현재 사용자 기준 위치 오버레이 (초록 원형 펄스 형태)
+  const userContent = `<div class="custom-user-marker"><div class="pulse-marker"></div><div class="center-marker" style="background-color: #10b981;"></div></div>`;
+  state.userMarker = new kakao.maps.CustomOverlay({
+    position: centerPosition,
+    content: userContent,
+    xAnchor: 0.5,
+    yAnchor: 0.5
   });
+  state.userMarker.setMap(state.map);
 
-  state.map.on('click', function(e) {
+  // 탐색 반경 원 생성
+  state.radiusCircle = new kakao.maps.Circle({
+    center: centerPosition,
+    radius: state.searchRadius,
+    strokeWeight: 1.5,
+    strokeColor: '#10b981',
+    strokeOpacity: 0.7,
+    strokeStyle: 'dash',
+    fillColor: '#10b981',
+    fillOpacity: 0.08
+  });
+  state.radiusCircle.setMap(state.map);
+
+  // 지도 클릭 이벤트 (기준 위치 이동)
+  kakao.maps.event.addListener(state.map, 'click', function(mouseEvent) {
     if (state.isLocationLocked) {
       showToast('<i class="fa-solid fa-lock"></i>&nbsp; 위치 고정 중입니다. 먼저 고정을 해제하세요.', 'lock', 2200);
       return;
     }
-    updateLocationCoords(e.latlng.lat, e.latlng.lng, false);
+    const latlng = mouseEvent.latLng;
+    updateLocationCoords(latlng.getLat(), latlng.getLng(), false);
   });
-
-  state.radiusCircle = L.circle([state.currentCoords.lat, state.currentCoords.lng], {
-    color: '#03c75a',
-    fillColor: '#03c75a',
-    fillOpacity: 0.08,
-    radius: state.searchRadius,
-    weight: 1.5,
-    dashArray: '4, 4'
-  }).addTo(state.map);
-
-  setTimeout(() => state.map.invalidateSize(), 400);
 }
 
 // ============================================================
-// 4. 이벤트 리스너
+// 4. 이벤트 리스너 설정
 // ============================================================
 function setupEventListeners() {
   DOM.btnGetLocation.addEventListener('click', handleGetLocation);
@@ -189,7 +250,10 @@ function setupEventListeners() {
     const radius = parseInt(e.target.value);
     state.searchRadius = radius;
     DOM.rangeValueDisplay.textContent = radius >= 1000 ? '1.0km' : `${radius}m`;
-    if (state.radiusCircle) state.radiusCircle.setRadius(radius);
+    
+    if (state.radiusCircle) {
+      state.radiusCircle.setRadius(radius);
+    }
   });
 
   DOM.categoryChips.forEach(chip => {
@@ -222,43 +286,7 @@ function setupEventListeners() {
     });
   });
 
-  // 관리자 모드 로그인 이벤트
-  if (DOM.btnAdminLogin) {
-    DOM.btnAdminLogin.addEventListener('click', () => {
-      if (DOM.naverSettings.classList.contains('hidden')) {
-        DOM.adminModal.classList.remove('hidden');
-        DOM.adminPasswordInput.focus();
-      } else {
-        DOM.naverSettings.classList.add('hidden');
-        sessionStorage.removeItem('isAdminAuthenticated');
-        showToast('<i class="fa-solid fa-lock"></i>&nbsp; 관리자 설정 창이 숨겨졌습니다.', 'lock', 2200);
-      }
-    });
-  }
-  if (DOM.btnCloseAdminModal) {
-    DOM.btnCloseAdminModal.addEventListener('click', () => {
-      DOM.adminModal.classList.add('hidden');
-      DOM.adminPasswordInput.value = '';
-    });
-  }
-  if (DOM.btnSubmitAdmin) {
-    DOM.btnSubmitAdmin.addEventListener('click', handleAdminLogin);
-  }
-  if (DOM.adminPasswordInput) {
-    DOM.adminPasswordInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') handleAdminLogin();
-    });
-  }
-  
-  // 외부 클릭 시 모달 닫기
-  window.addEventListener('click', (e) => {
-    if (e.target === DOM.adminModal) {
-      DOM.adminModal.classList.add('hidden');
-      DOM.adminPasswordInput.value = '';
-    }
-  });
-
-  // 주소 검색 이벤트
+  // 주소 검색
   if (DOM.btnSearchAddress) {
     DOM.btnSearchAddress.addEventListener('click', handleAddressSearch);
   }
@@ -269,21 +297,9 @@ function setupEventListeners() {
   }
 }
 
-function handleAdminLogin() {
-  const val = DOM.adminPasswordInput.value.trim();
-  if (val === '1111') {
-    DOM.naverSettings.classList.remove('hidden');
-    DOM.adminModal.classList.add('hidden');
-    DOM.adminPasswordInput.value = '';
-    showToast('<i class="fa-solid fa-lock-open"></i>&nbsp; 관리자 인증 성공! 네이버 API 설정 활성화.', 'success', 2500);
-    sessionStorage.setItem('isAdminAuthenticated', 'true');
-  } else {
-    showToast('<i class="fa-solid fa-triangle-exclamation"></i>&nbsp; 비밀번호가 일치하지 않습니다.', 'lock', 2500);
-    DOM.adminPasswordInput.value = '';
-    DOM.adminPasswordInput.focus();
-  }
-}
-
+// ============================================================
+// 카카오 주소 검색 (Geocoder)
+// ============================================================
 async function handleAddressSearch() {
   const address = DOM.inputAddress.value.trim();
   if (!address) {
@@ -294,43 +310,56 @@ async function handleAddressSearch() {
   DOM.geoStatusText.className = 'geo-status loading';
   DOM.geoStatusText.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> "${address}" 검색 중...`;
   
-  const result = await fetchGeocodeNominatim(address);
-  if (result) {
-    showToast(`<i class="fa-solid fa-magnifying-glass-location"></i>&nbsp; 주소 검색 성공: ${result.roadAddress.split(',')[0]}`, 'success', 3000);
-    updateLocationCoords(result.lat, result.lng, false);
-  } else {
-    DOM.geoStatusText.className = 'geo-status error';
-    DOM.geoStatusText.innerHTML = '<i class="fa-solid fa-circle-xmark"></i> 주소를 찾을 수 없습니다.';
-    showToast(`<i class="fa-solid fa-circle-exclamation"></i>&nbsp; "${address}" 주소를 찾을 수 없습니다.`, 'lock', 2800);
-  }
-}
-
-async function fetchGeocodeNominatim(address) {
-  const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}&accept-language=ko`;
-  try {
-    const res = await fetch(url, {
-      headers: {
-        'User-Agent': 'NearbyRestaurantsApp/1.0'
-      }
-    });
-    if (!res.ok) throw new Error('Nominatim Geocoding API Error');
-    const data = await res.json();
-    if (data && data.length > 0) {
-      return {
-        lat: parseFloat(data[0].lat),
-        lng: parseFloat(data[0].lon),
-        roadAddress: data[0].display_name
-      };
+  const geocoder = new kakao.maps.services.Geocoder();
+  
+  geocoder.addressSearch(address, function(result, status) {
+    if (status === kakao.maps.services.Status.OK && result.length > 0) {
+      const coords = result[0];
+      const roadAddress = coords.road_address?.address_name || coords.address?.address_name || address;
+      showToast(`<i class="fa-solid fa-magnifying-glass-location"></i>&nbsp; 주소 검색 성공: ${roadAddress.split(' ')[2] || roadAddress}`, 'success', 3000);
+      updateLocationCoords(parseFloat(coords.y), parseFloat(coords.x), false);
+    } else {
+      DOM.geoStatusText.className = 'geo-status error';
+      DOM.geoStatusText.innerHTML = '<i class="fa-solid fa-circle-xmark"></i> 주소를 찾을 수 없습니다.';
+      showToast(`<i class="fa-solid fa-circle-exclamation"></i>&nbsp; "${address}" 주소를 찾을 수 없습니다.`, 'lock', 2800);
     }
-    return null;
-  } catch (e) {
-    console.error('[Nominatim Geocoding 실패]', e);
-    return null;
-  }
+  });
 }
 
 // ============================================================
-// 토스트 알림
+// 역지오코딩 (좌표 -> 주소 변환)
+// ============================================================
+function getAddressFromCoords(lat, lng) {
+  return new Promise((resolve) => {
+    const geocoder = new kakao.maps.services.Geocoder();
+    geocoder.coord2Address(lng, lat, function(result, status) {
+      if (status === kakao.maps.services.Status.OK && result.length > 0) {
+        const roadAddr = result[0].road_address?.address_name;
+        const regionAddr = result[0].address?.address_name;
+        resolve(roadAddr || regionAddr || '주소 정보 없음');
+      } else {
+        resolve('주소 정보 없음');
+      }
+    });
+  });
+}
+
+function getRegionNameFromCoords(lat, lng) {
+  return new Promise((resolve) => {
+    const geocoder = new kakao.maps.services.Geocoder();
+    geocoder.coord2RegionCode(lng, lat, function(result, status) {
+      if (status === kakao.maps.services.Status.OK && result.length > 0) {
+        const reg = result[0];
+        resolve(`${reg.region_1depth_name} ${reg.region_2depth_name}`);
+      } else {
+        resolve('부산 사상구'); // 기본 폴백
+      }
+    });
+  });
+}
+
+// ============================================================
+// 토스트 알림 (화이트 테마)
 // ============================================================
 function showToast(message, type = 'default', durationMs = 2800) {
   let container = document.getElementById('toast-container');
@@ -343,6 +372,10 @@ function showToast(message, type = 'default', durationMs = 2800) {
 
   const toast = document.createElement('div');
   toast.className = `toast ${type}-toast`;
+  toast.style.background = '#ffffff';
+  toast.style.color = '#0f172a';
+  toast.style.border = '1px solid rgba(0, 0, 0, 0.08)';
+  toast.style.boxShadow = '0 10px 25px rgba(0, 0, 0, 0.08)';
   toast.innerHTML = message;
   container.appendChild(toast);
 
@@ -370,9 +403,8 @@ function toggleLocationLock() {
     DOM.btnLockLocation.classList.remove('active');
     DOM.lockIcon.className = 'fa-solid fa-lock-open';
     DOM.lockLabel.textContent = '실시간 위치 고정하기';
-    if (state.userMarker) state.userMarker.dragging.enable();
     DOM.geoStatusText.className = 'geo-status';
-    DOM.geoStatusText.innerHTML = `<i class="fa-solid fa-lock-open"></i> 위치 고정 해제됨 — 지도를 클릭하거나 핀을 드래그하세요.`;
+    DOM.geoStatusText.innerHTML = `<i class="fa-solid fa-lock-open"></i> 위치 고정 해제됨 — 지도를 클릭해 기준 위치를 설정하세요.`;
     showToast('<i class="fa-solid fa-lock-open"></i>&nbsp; 실시간 위치 고정 해제됨', 'unlock', 2500);
 
   } else {
@@ -387,7 +419,6 @@ function toggleLocationLock() {
     DOM.lockLabel.textContent = '위치 고정 중 (탭하여 해제)';
     DOM.geoStatusText.className = 'geo-status loading';
     DOM.geoStatusText.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> 실시간 GPS 위치 추적 중...`;
-    if (state.userMarker) state.userMarker.dragging.disable();
     showToast('<i class="fa-solid fa-lock"></i>&nbsp; 실시간 GPS 위치 고정 활성화!', 'lock', 2500);
 
     state.watchId = navigator.geolocation.watchPosition(
@@ -402,11 +433,13 @@ function toggleLocationLock() {
         DOM.coordsDisplay.classList.remove('hidden');
         DOM.geoStatusText.className = 'geo-status success';
         DOM.geoStatusText.innerHTML = `<i class="fa-solid fa-circle-check"></i> 실시간 GPS 추적 중 (자동 갱신)`;
+        
         if (state.map) {
-          state.map.setView([lat, lng], 15, { animate: true });
-          if (state.userMarker) state.userMarker.setLatLng([lat, lng]);
+          const newPos = new kakao.maps.LatLng(lat, lng);
+          state.map.panTo(newPos);
+          if (state.userMarker) state.userMarker.setPosition(newPos);
           if (state.radiusCircle) {
-            state.radiusCircle.setLatLng([lat, lng]);
+            state.radiusCircle.setCenter(newPos);
             state.radiusCircle.setRadius(state.searchRadius);
           }
         }
@@ -425,14 +458,11 @@ function toggleLocationLock() {
         DOM.btnLockLocation.classList.remove('active');
         DOM.lockIcon.className = 'fa-solid fa-lock-open';
         DOM.lockLabel.textContent = '실시간 위치 고정하기';
-        if (state.userMarker) state.userMarker.dragging.enable();
         DOM.geoStatusText.className = 'geo-status error';
         DOM.geoStatusText.innerHTML = `<i class="fa-solid fa-circle-exclamation"></i> GPS 사용 불가 — 동서대로 자동 전환`;
-        state.currentCoords.lat = 35.1457;
-        state.currentCoords.lng = 129.0072;
-        updateMapToUserCoords();
-        fetchNearbyRestaurants();
-        showToast('<i class="fa-solid fa-circle-exclamation"></i>&nbsp; GPS 오류로 부산 동서대학교 위치로 자동 전환되었습니다.', 'lock', 3200);
+        
+        updateLocationCoords(35.1457, 129.0072, false);
+        showToast('<i class="fa-solid fa-circle-exclamation"></i>&nbsp; GPS 오류로 부산 동서대학교 위치로 설정되었습니다.', 'lock', 3200);
       },
       { enableHighAccuracy: false, maximumAge: 5000, timeout: 15000 }
     );
@@ -493,16 +523,15 @@ function updateLocationCoords(lat, lng, isGPS = false) {
   DOM.btnGetLocation.disabled = false;
 
   if (state.map) {
-    state.map.setView([lat, lng], 15);
+    const newPos = new kakao.maps.LatLng(lat, lng);
+    state.map.setCenter(newPos);
+    
     if (state.userMarker) {
-      state.userMarker.setLatLng([lat, lng]);
-      state.userMarker.bindPopup(isGPS
-        ? '<b>현재 내 GPS 위치</b><br>드래그하거나 지도를 클릭하여 변경 가능.'
-        : '<b>기준 위치 (수동 지정)</b><br>드래그하거나 다른 곳을 클릭하여 변경 가능.'
-      ).openPopup();
+      state.userMarker.setPosition(newPos);
+      openUserMarkerInfoWindow(isGPS);
     }
     if (state.radiusCircle) {
-      state.radiusCircle.setLatLng([lat, lng]);
+      state.radiusCircle.setCenter(newPos);
       state.radiusCircle.setRadius(state.searchRadius);
     }
   }
@@ -521,466 +550,142 @@ function handleGeoError(err) {
     default: errorReason = '위치 탐색 오류가 발생했습니다.'; break;
   }
   
-  showToast(`<i class="fa-solid fa-circle-exclamation"></i>&nbsp; ${errorReason}<br>부산 동서대학교 주변으로 자동 탐색합니다.`, 'lock', 3500);
+  showToast(`<i class="fa-solid fa-circle-exclamation"></i>&nbsp; ${errorReason}<br>부산 동서대학교 주변으로 자동 설정합니다.`, 'lock', 3500);
 
-  // 기본값: 부산 동서대학교
   state.hasGeoPermission = false;
-  state.currentCoords.lat = 35.1457;
-  state.currentCoords.lng = 129.0072;
+  updateLocationCoords(35.1457, 129.0072, false);
+}
+
+// ============================================================
+// 사용자 기준위치 인포윈도우 (화이트 테마)
+// ============================================================
+function openUserMarkerInfoWindow(isGPS) {
+  if (activeInfoWindow) {
+    activeInfoWindow.close();
+  }
   
-  DOM.valLat.textContent = '35.14570';
-  DOM.valLng.textContent = '129.00720';
-  DOM.coordsDisplay.classList.remove('hidden');
-  DOM.geoStatusText.className = 'geo-status error';
-  DOM.geoStatusText.innerHTML = `<i class="fa-solid fa-circle-exclamation"></i> GPS 사용 불가 (부산 동서대학교 기준)`;
-  DOM.btnGetLocation.disabled = false;
-
-  updateMapToUserCoords();
-  fetchNearbyRestaurants();
-}
-
-function updateMapToUserCoords() {
-  const coords = [state.currentCoords.lat, state.currentCoords.lng];
-  if (state.map) {
-    state.map.setView(coords, 15);
-    if (state.userMarker) {
-      state.userMarker.setLatLng(coords);
-      state.userMarker.bindPopup('<b>현재 탐색 기준 위치</b><br>부산 동서대학교 주변을 탐색합니다.').openPopup();
-    }
-    if (state.radiusCircle) {
-      state.radiusCircle.setLatLng(coords);
-      state.radiusCircle.setRadius(state.searchRadius);
-    }
-  }
+  const text = isGPS
+    ? '<b>현재 내 GPS 위치</b><br>지도를 클릭해 탐색할 위치를 변경해보세요.'
+    : '<b>기준 위치 (수동 지정)</b><br>지도를 클릭해 다른 곳으로 이동 가능.';
+    
+  const iwContent = `
+    <div style="padding: 10px 14px; font-size: 0.82rem; font-family: var(--font-main); color: #0f172a; line-height: 1.4; background: #fff; border-radius: 4px; min-width: 180px;">
+      ${text}
+    </div>
+  `;
+  
+  activeInfoWindow = new kakao.maps.InfoWindow({
+    position: new kakao.maps.LatLng(state.currentCoords.lat, state.currentCoords.lng),
+    content: iwContent,
+    removable: true
+  });
+  
+  activeInfoWindow.open(state.map);
 }
 
 // ============================================================
-// 현재 위치에서 행정구역 이름 가져오기 (좌표 → 지역명)
-// Kakao 역지오코딩 API 또는 좌표 기반 지역 추정
+// 카카오 Places 서비스를 이용해 병렬 키워드 음식점 탐색 (실제 데이터)
 // ============================================================
-function getLocationName(lat, lng) {
-  // 부산광역시 영역: 위도 34.8~35.4, 경도 128.7~129.3
-  // 동서대학교(사상구): 위도 35.14~35.16, 경도 128.99~129.02
-  if (lat >= 35.10 && lat <= 35.20 && lng >= 128.95 && lng <= 129.05) {
-    return '부산 사상구';
-  } else if (lat >= 35.05 && lat <= 35.25 && lng >= 128.9 && lng <= 129.3) {
-    return '부산';
-  } else if (lat >= 37.4 && lat <= 37.7 && lng >= 126.8 && lng <= 127.2) {
-    return '서울';
-  } else if (lat >= 35.05 && lat <= 35.35 && lng >= 128.5 && lng <= 128.8) {
-    return '창원';
-  } else if (lat >= 35.8 && lat <= 36.0 && lng >= 128.4 && lng <= 128.7) {
-    return '대구';
-  } else if (lat >= 36.3 && lat <= 36.5 && lng >= 127.3 && lng <= 127.6) {
-    return '대전';
-  } else if (lat >= 35.1 && lat <= 35.2 && lng >= 126.8 && lng <= 127.0) {
-    return '광주';
-  } else if (lat >= 37.2 && lat <= 37.5 && lng >= 126.7 && lng <= 127.1) {
-    return '경기';
-  } else {
-    // 기본: 좌표 값으로 한국 내 지역 추정
-    if (lat > 36.5) return '서울 경기';
-    if (lat > 35.5) return '충청';
-    return '부산';
-  }
+function searchPlacesPromise(keyword, lat, lng, radius) {
+  return new Promise((resolve) => {
+    const ps = new kakao.maps.services.Places();
+    const options = {
+      location: new kakao.maps.LatLng(lat, lng),
+      radius: radius,
+      sort: kakao.maps.services.SortBy.DISTANCE,
+      size: 15
+    };
+    
+    ps.keywordSearch(keyword, function(data, status) {
+      if (status === kakao.maps.services.Status.OK) {
+        resolve(data || []);
+      } else {
+        resolve([]);
+      }
+    }, options);
+  });
 }
 
-// ============================================================
-// 맛집 데이터 패치 핵심 함수
-// ============================================================
 async function fetchNearbyRestaurants() {
   showLoading(true);
   
   state.lastSearchCoords.lat = state.currentCoords.lat;
   state.lastSearchCoords.lng = state.currentCoords.lng;
   
-  const clientId = DOM.naverClientId ? DOM.naverClientId.value.trim() : '';
-  const clientSecret = DOM.naverClientSecret ? DOM.naverClientSecret.value.trim() : '';
-  const hasNaverCredentials = !!(clientId && clientSecret);
-  
-  try {
-    if (hasNaverCredentials) {
-      // ✅ 네이버 API 모드: 현재 좌표 기반 지역명으로 검색
-      const naverData = await fetchFromNaverAPI(clientId, clientSecret);
-      if (naverData && naverData.length > 0) {
-        processNaverData(naverData);
-      } else {
-        // API 결과 없으면 폴백
-        generateMockRestaurantsFallback();
-      }
-    } else {
-      // 폴백 모드: Overpass API(OSM) 시도 → 실패 시 더미 데이터
-      try {
-        const osmData = await fetchFromOverpassAPI();
-        processOSMData(osmData);
-      } catch (err) {
-        console.warn('Overpass API 실패, 더미 데이터로 대체:', err);
-        generateMockRestaurantsFallback();
-      }
-    }
-  } catch (error) {
-    console.error('음식점 데이터 로드 실패:', error);
-    generateMockRestaurantsFallback();
-  } finally {
-    showLoading(false);
-  }
-}
-
-// ============================================================
-// 네이버 로컬 검색 API 호출
-// 핵심: 현재 좌표 → 지역명 → "부산 사상구 한식" 형태로 검색
-// ============================================================
-async function fetchFromNaverAPI(clientId, clientSecret) {
-  const keywords = Array.from(state.selectedCategories);
-  if (keywords.length === 0) return [];
-  
-  const { lat, lng } = state.currentCoords;
-  
-  // ✅ 현재 좌표 기반으로 지역명을 정확하게 결정
-  const locationName = getLocationName(lat, lng);
-  
-  let allItems = [];
-  const corsProxy = 'https://cors-anywhere.herokuapp.com/';
-
-  console.log(`📍 현재 위치: ${lat.toFixed(4)}, ${lng.toFixed(4)} → 지역: ${locationName}`);
-  
-  for (const keyword of keywords) {
-    // ✅ "부산 사상구 한식" 형태로 지역 기반 검색
-    const searchQuery = `${locationName} ${keyword}`;
-    const apiURL = `https://openapi.naver.com/v1/search/local.json?query=${encodeURIComponent(searchQuery)}&display=20&start=1&sort=random`;
-    
-    incrementNaverUsage(1);
-    
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 6000);
-    
-    try {
-      console.log(`🔍 네이버 검색: "${searchQuery}"`);
-      
-      const response = await fetch(corsProxy + apiURL, {
-        headers: {
-          'X-Naver-Client-Id': clientId,
-          'X-Naver-Client-Secret': clientSecret,
-          'X-Requested-With': 'XMLHttpRequest'
-        },
-        signal: controller.signal
-      });
-      
-      clearTimeout(timeoutId);
-      
-      if (response.ok) {
-        const data = await response.json();
-        if (data.items && data.items.length > 0) {
-          console.log(`✅ "${searchQuery}": ${data.items.length}개 결과`);
-          
-          data.items.forEach(item => {
-            // 네이버 mapx, mapy = KATEC 좌표 (1/10,000,000도 단위)
-            let itemLat = lat + (Math.random() - 0.5) * 0.006;
-            let itemLng = lng + (Math.random() - 0.5) * 0.008;
-            
-            if (item.mapy && item.mapx) {
-              const rawLat = parseInt(item.mapy) / 10000000;
-              const rawLng = parseInt(item.mapx) / 10000000;
-              // 유효한 한반도 범위 내인지 확인
-              if (rawLat > 33.0 && rawLat < 38.5 && rawLng > 124.5 && rawLng < 132.0) {
-                itemLat = rawLat;
-                itemLng = rawLng;
-              }
-            }
-            
-            allItems.push({
-              name: item.title.replace(/<[^>]*>?/gm, ''),
-              category: keyword,
-              address: item.address || item.roadAddress || '',
-              roadAddress: item.roadAddress || '',
-              telephone: item.telephone || '정보 없음',
-              lat: itemLat,
-              lng: itemLng
-            });
-          });
-        } else {
-          console.warn(`⚠️ "${searchQuery}": 검색 결과 없음`);
-        }
-      } else {
-        const errText = await response.text().catch(() => '');
-        console.warn(`⚠️ 네이버 API 응답 오류 (${response.status}):`, errText.substring(0, 100));
-        
-        if (response.status === 403) {
-          showToast('<i class="fa-solid fa-shield-halved"></i>&nbsp; CORS 프록시 접근이 필요합니다. <a href="https://cors-anywhere.herokuapp.com/corsdemo" target="_blank" style="color:#03c75a">여기를 클릭</a>하여 임시 접근을 허용하세요.', 'lock', 6000);
-        }
-      }
-    } catch (e) {
-      clearTimeout(timeoutId);
-      if (e.name === 'AbortError') {
-        console.warn(`⏱️ "${keyword}" 요청 시간 초과`);
-      } else {
-        console.warn(`❌ "${keyword}" 호출 실패:`, e.message);
-      }
-    }
-  }
-  
-  return allItems;
-}
-
-// ============================================================
-// 네이버 API 데이터 처리
-// ============================================================
-function processNaverData(items) {
-  const { lat: userLat, lng: userLng } = state.currentCoords;
-  const result = [];
-  
-  items.forEach((item, index) => {
-    if (!item.name) return;
-    
-    const itemLat = item.lat;
-    const itemLng = item.lng;
-    
-    if (isNaN(itemLat) || isNaN(itemLng)) return;
-    
-    // 카테고리 판별
-    const category = item.category || determineCategory(item.name, '');
-    if (!state.selectedCategories.has(category)) return;
-    
-    // 현재 좌표와의 거리 계산
-    const distance = calculateDistance(userLat, userLng, itemLat, itemLng);
-    
-    // 반경 내 음식점만 표시 (네이버 결과는 지역명으로 검색했으므로 반경 2배까지 허용)
-    const maxDist = Math.max(state.searchRadius * 2, 3000);
-    if (distance > maxDist) return;
-    
-    const rating = parseFloat((3.8 + Math.random() * 1.2).toFixed(1));
-    const reviews = Math.floor(Math.random() * 450) + 12;
-    
-    result.push({
-      id: `naver_${index}_${Date.now()}`,
-      name: item.name,
-      category: category,
-      lat: itemLat,
-      lng: itemLng,
-      distance: Math.round(distance),
-      rating: rating,
-      reviews: reviews,
-      telephone: item.telephone || '정보 없음',
-      address: item.address || item.roadAddress || '주소 정보 없음',
-      source: 'naver'
-    });
-  });
-  
-  state.restaurants = result;
-  
-  // 결과가 너무 적으면 더미로 보강
-  if (state.restaurants.length < 3) {
-    const needed = 8 - state.restaurants.length;
-    fillUpWithMockData(needed);
-    if (result.length === 0) {
-      showToast('<i class="fa-solid fa-triangle-exclamation"></i>&nbsp; 반경 내 음식점이 적어 추천 데이터를 추가했습니다.', 'lock', 3000);
-    }
-  }
-  
-  postFetchProcess();
-}
-
-// ============================================================
-// Overpass API (OSM) 호출
-// ============================================================
-async function fetchFromOverpassAPI() {
   const { lat, lng } = state.currentCoords;
   const radius = state.searchRadius;
+  const keywords = Array.from(state.selectedCategories);
   
-  const query = `
-    [out:json][timeout:8];
-    (
-      node["amenity"="restaurant"](around:${radius},${lat},${lng});
-      node["amenity"="fast_food"](around:${radius},${lat},${lng});
-      way["amenity"="restaurant"](around:${radius},${lat},${lng});
-      way["amenity"="fast_food"](around:${radius},${lat},${lng});
-    );
-    out center;
-  `;
-  
-  const url = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`;
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 5000);
-  
-  try {
-    const response = await fetch(url, { signal: controller.signal });
-    clearTimeout(timeoutId);
-    if (!response.ok) throw new Error('Overpass API response not OK');
-    const data = await response.json();
-    return data.elements || [];
-  } catch (error) {
-    clearTimeout(timeoutId);
-    throw error;
-  }
-}
-
-// ============================================================
-// OSM 데이터 처리
-// ============================================================
-function processOSMData(elements) {
-  const { lat: userLat, lng: userLng } = state.currentCoords;
-  const result = [];
-  
-  elements.forEach((item, index) => {
-    const name = item.tags?.['name:ko'] || item.tags?.name || item.tags?.['name:en'] || '';
-    if (!name) return;
-    
-    const itemLat = item.lat || item.center?.lat;
-    const itemLng = item.lon || item.center?.lon;
-    if (!itemLat || !itemLng || isNaN(itemLat) || isNaN(itemLng)) return;
-    
-    const cuisineTag = item.tags?.cuisine || '';
-    const category = determineCategory(name, cuisineTag);
-    if (!state.selectedCategories.has(category)) return;
-    
-    const distance = calculateDistance(userLat, userLng, itemLat, itemLng);
-    if (distance > state.searchRadius) return;
-    
-    result.push({
-      id: `osm_${index}_${Date.now()}`,
-      name: name,
-      category: category,
-      lat: itemLat,
-      lng: itemLng,
-      distance: Math.round(distance),
-      rating: parseFloat((3.8 + Math.random() * 1.2).toFixed(1)),
-      reviews: Math.floor(Math.random() * 450) + 12,
-      telephone: item.tags?.phone || item.tags?.['contact:phone'] || '정보 없음',
-      address: item.tags?.['addr:full'] || item.tags?.['addr:street'] || '주소 정보 없음',
-      source: 'osm'
-    });
-  });
-  
-  state.restaurants = result;
-  
-  // OSM 결과가 적으면 더미 보강
-  if (state.restaurants.length < 5) {
-    fillUpWithMockData(Math.max(5 - state.restaurants.length, 3));
-  }
-  
-  postFetchProcess();
-}
-
-// ============================================================
-// 카테고리 판별
-// ============================================================
-function determineCategory(name, cuisine) {
-  const n = name.toLowerCase();
-  const c = cuisine.toLowerCase();
-  
-  if (n.includes('짜장') || n.includes('짬뽕') || n.includes('반점') || n.includes('중식') || n.includes('마라') || n.includes('딤섬') || n.includes('양꼬치') || c.includes('chinese')) return '중식';
-  if (n.includes('스시') || n.includes('초밥') || n.includes('라멘') || n.includes('우동') || n.includes('돈까스') || n.includes('돈카츠') || n.includes('일식') || c.includes('japanese') || c.includes('sushi') || c.includes('ramen')) return '일식';
-  if (n.includes('치킨') || n.includes('닭강정') || n.includes('통닭') || n.includes('호프') || n.includes('chicken') || c.includes('chicken')) return '치킨';
-  if (n.includes('피자') || n.includes('pizza') || c.includes('pizza') || c.includes('italian')) return '피자';
-  if (n.includes('버거') || n.includes('burger') || n.includes('맥도날드') || n.includes('버거킹') || n.includes('롯데리아') || n.includes('맘스터치') || c.includes('burger')) return '햄버거';
-  if (n.includes('떡볶이') || n.includes('김밥') || n.includes('순대') || n.includes('만두') || n.includes('분식') || n.includes('어묵') || n.includes('튀김')) return '분식';
-  return '한식';
-}
-
-// ============================================================
-// 위치 기반 가상 주소/전화번호 생성
-// ============================================================
-function getMockAddress(lat) {
-  if (lat >= 35.10 && lat <= 35.20) {
-    const streets = ['주례로', '사상로', '백양대로', '덕포로', '학장로', '괴정로'];
-    const street = streets[Math.floor(Math.random() * streets.length)];
-    return `부산광역시 사상구 ${street} ${Math.floor(10 + Math.random() * 200)}`;
-  } else if (lat > 34.8 && lat < 35.4) {
-    const dists = ['해운대구', '수영구', '남구', '동래구', '부산진구', '서구'];
-    const dist = dists[Math.floor(Math.random() * dists.length)];
-    return `부산광역시 ${dist} ${Math.floor(1 + Math.random() * 500)}번길`;
-  } else if (lat > 37.4 && lat < 37.7) {
-    return `서울특별시 강남구 테헤란로 ${Math.floor(10 + Math.random() * 300)}길`;
-  }
-  return `부산광역시 사상구 주례동 ${Math.floor(100 + Math.random() * 900)}`;
-}
-
-function getMockPhone(lat) {
-  const isBusan = lat < 36.0;
-  const prefix = isBusan ? '051' : '02';
-  return `${prefix}-${Math.floor(100 + Math.random() * 900)}-${Math.floor(1000 + Math.random() * 9000)}`;
-}
-
-// ============================================================
-// 폴백 더미 데이터 생성 (API 실패 시)
-// ============================================================
-function generateMockRestaurantsFallback() {
-  const result = [];
-  const { lat, lng } = state.currentCoords;
-  const categories = Array.from(state.selectedCategories);
-  
-  if (categories.length === 0) {
+  if (keywords.length === 0) {
     state.restaurants = [];
     postFetchProcess();
+    showLoading(false);
     return;
   }
   
-  let idCounter = 0;
-  categories.forEach(cat => {
-    const count = Math.floor(Math.random() * 3) + 4; // 4~6개
-    const names = mockRestaurantNames[cat];
+  try {
+    // 1. 역지오코딩을 이용해 탐색할 동네 이름 획득
+    const locationName = await getRegionNameFromCoords(lat, lng);
+    const addressDetail = await getAddressFromCoords(lat, lng);
     
-    for (let i = 0; i < count; i++) {
-      const name = names[Math.floor(Math.random() * names.length)];
-      const distanceMeters = 150 + Math.random() * (state.searchRadius - 200);
-      const angle = Math.random() * Math.PI * 2;
-      const offsetLat = (distanceMeters * Math.cos(angle)) / 111000;
-      const offsetLng = (distanceMeters * Math.sin(angle)) / (111000 * Math.cos(lat * Math.PI / 180));
-      const itemLat = lat + offsetLat;
-      const itemLng = lng + offsetLng;
-      
-      result.push({
-        id: `mock_${idCounter++}_${Date.now()}`,
-        name: name,
-        category: cat,
-        lat: itemLat,
-        lng: itemLng,
-        distance: Math.round(calculateDistance(lat, lng, itemLat, itemLng)),
-        rating: parseFloat((3.8 + Math.random() * 1.2).toFixed(1)),
-        reviews: Math.floor(Math.random() * 350) + 5,
-        telephone: getMockPhone(lat),
-        address: getMockAddress(lat),
-        source: 'mock'
-      });
-    }
-  });
-  
-  state.restaurants = result;
-  postFetchProcess();
-}
-
-// ============================================================
-// 부족한 결과 더미로 보강
-// ============================================================
-function fillUpWithMockData(neededCount) {
-  const { lat, lng } = state.currentCoords;
-  const categories = Array.from(state.selectedCategories);
-  if (categories.length === 0) return;
-  
-  for (let i = 0; i < neededCount; i++) {
-    const cat = categories[Math.floor(Math.random() * categories.length)];
-    const names = mockRestaurantNames[cat];
-    const name = names[Math.floor(Math.random() * names.length)] + ' (추천)';
-    const distanceMeters = 150 + Math.random() * (state.searchRadius - 200);
-    const angle = Math.random() * Math.PI * 2;
-    const offsetLat = (distanceMeters * Math.cos(angle)) / 111000;
-    const offsetLng = (distanceMeters * Math.sin(angle)) / (111000 * Math.cos(lat * Math.PI / 180));
-    const itemLat = lat + offsetLat;
-    const itemLng = lng + offsetLng;
+    // UI 주소창 업데이트
+    DOM.geoStatusText.className = 'geo-status success';
+    DOM.geoStatusText.innerHTML = `<i class="fa-solid fa-circle-check"></i> ${addressDetail.split(' ').slice(0,3).join(' ')}`;
+    showToast(`<i class="fa-solid fa-map-pin"></i>&nbsp; ${locationName} 맛집 찾는 중...`, 'success', 1800);
     
-    state.restaurants.push({
-      id: `fill_${i}_${Date.now()}`,
-      name: name,
-      category: cat,
-      lat: itemLat,
-      lng: itemLng,
-      distance: Math.round(distanceMeters),
-      rating: parseFloat((4.0 + Math.random() * 1.0).toFixed(1)),
-      reviews: Math.floor(Math.random() * 200) + 10,
-      telephone: getMockPhone(lat),
-      address: getMockAddress(lat),
-      source: 'mock'
+    // 2. 카카오 로컬 키워드 병렬 검색
+    const searchPromises = keywords.map(keyword => {
+      let queryKeyword = keyword;
+      if (keyword === '햄버거') queryKeyword = '버거';
+      return searchPlacesPromise(queryKeyword, lat, lng, radius)
+        .then(docs => ({ category: keyword, docs }));
     });
+    
+    const results = await Promise.all(searchPromises);
+    
+    const allRestaurants = [];
+    results.forEach(({ category, docs }) => {
+      docs.forEach(doc => {
+        const docId = `kakao_${doc.id}`;
+        
+        // 중복 장소 스킵
+        if (allRestaurants.some(r => r.id === docId)) return;
+        
+        // 카카오 데이터가 제공하는 위경도 정보 확인
+        const itemLat = parseFloat(doc.y);
+        const itemLng = parseFloat(doc.x);
+        const distance = parseInt(doc.distance) || Math.round(calculateDistance(lat, lng, itemLat, itemLng));
+        
+        // 탐색 반경 확인 후 적합한 맛집만 포함
+        if (distance > radius) return;
+        
+        allRestaurants.push({
+          id: docId,
+          name: doc.place_name,
+          category: category,
+          lat: itemLat,
+          lng: itemLng,
+          distance: distance,
+          rating: parseFloat((4.0 + Math.random() * 1.0).toFixed(1)), // 평점 시뮬레이션
+          reviews: Math.floor(Math.random() * 180) + 6,
+          telephone: doc.phone || '정보 없음',
+          address: doc.road_address_name || doc.address_name || '주소 정보 없음',
+          source: 'kakao'
+        });
+      });
+    });
+    
+    // 맛집 목록 상태에 추가
+    state.restaurants = allRestaurants;
+    
+    // 포스트 프로세스 실행 (Mock data 추가 등은 완전히 생략됨)
+    postFetchProcess();
+  } catch (error) {
+    console.error('카카오 로컬 음식점 로딩 실패:', error);
+    state.restaurants = [];
+    postFetchProcess();
+  } finally {
+    showLoading(false);
   }
 }
 
@@ -1068,18 +773,17 @@ function renderRestaurantList() {
   filtered.forEach(restaurant => {
     const meta = categoryMetadata[restaurant.category];
     const isFav = state.favoriteRestaurants.some(f => f.name === restaurant.name);
-    const isMock = restaurant.source === 'mock';
     
     const card = document.createElement('div');
     card.className = 'restaurant-card';
     card.setAttribute('data-id', restaurant.id);
     
-    const regionName = (getLocationName(restaurant.lat, restaurant.lng) || '부산');
+    const regionName = (restaurant.address || '부산').split(' ')[2] || '맛집';
     const blogSearchUrl = `https://search.naver.com/search.naver?where=blog&query=${encodeURIComponent(restaurant.name + ' ' + regionName + ' 맛집')}`;
 
     card.innerHTML = `
       <div class="card-header-row">
-        <span class="card-category-badge">${meta.emoji} ${restaurant.category}${isMock ? ' <small style="opacity:0.5;font-size:0.65rem">(추천)</small>' : ''}</span>
+        <span class="card-category-badge">${meta.emoji} ${restaurant.category}</span>
         <div style="display: flex; align-items: center; gap: 8px;">
           <button class="btn-fav-restaurant ${isFav ? 'active' : ''}" title="맛집 즐겨찾기">
             <i class="${isFav ? 'fa-solid fa-star' : 'fa-regular fa-star'}"></i>
@@ -1118,7 +822,7 @@ function renderRestaurantList() {
 
     card.querySelector('.btn-call').addEventListener('click', (e) => {
       e.stopPropagation();
-      const phone = e.target.closest('.btn-call').getAttribute('data-phone');
+      const phone = e.currentTarget.getAttribute('data-phone');
       if (phone && phone !== '정보 없음') {
         window.location.href = `tel:${phone.replace(/-/g, '')}`;
       } else {
@@ -1128,16 +832,16 @@ function renderRestaurantList() {
 
     card.querySelector('.btn-find-way').addEventListener('click', (e) => {
       e.stopPropagation();
-      const rLat = e.target.closest('.btn-find-way').getAttribute('data-lat');
-      const rLng = e.target.closest('.btn-find-way').getAttribute('data-lng');
-      // 네이버 지도 길찾기 연동
-      const naverMapUrl = `https://map.naver.com/v5/directions/-/${rLng},${rLat},${encodeURIComponent(restaurant.name)},,/walk?c=15,0,0,0,dh`;
-      window.open(naverMapUrl, '_blank');
+      const rLat = e.currentTarget.getAttribute('data-lat');
+      const rLng = e.currentTarget.getAttribute('data-lng');
+      // 카카오 맵 길찾기 웹 페이지 연동
+      const kakaoMapUrl = `https://map.kakao.com/link/to/${encodeURIComponent(restaurant.name)},${rLat},${rLng}`;
+      window.open(kakaoMapUrl, '_blank');
     });
 
     card.querySelector('.btn-blog').addEventListener('click', (e) => {
       e.stopPropagation();
-      const url = e.target.closest('.btn-blog').getAttribute('data-url');
+      const url = e.currentTarget.getAttribute('data-url');
       window.open(url, '_blank');
       showToast('<i class="fa-solid fa-blog"></i>&nbsp; 네이버 블로그 검색 결과를 엽니다', 'success', 2000);
     });
@@ -1147,11 +851,16 @@ function renderRestaurantList() {
 }
 
 // ============================================================
-// 지도 마커 업데이트
+// 지도 마커 및 인포윈도우 업데이트 (화이트 테마)
 // ============================================================
 function updateMapMarkers() {
-  state.restaurantMarkers.forEach(marker => state.map.removeLayer(marker));
+  // 기존 마커 모두 삭제
+  state.restaurantMarkers.forEach(marker => marker.setMap(null));
   state.restaurantMarkers = [];
+  
+  if (activeInfoWindow) {
+    activeInfoWindow.close();
+  }
   
   const filtered = state.activeFilter === 'all'
     ? state.restaurants
@@ -1159,40 +868,60 @@ function updateMapMarkers() {
     
   filtered.forEach(restaurant => {
     const meta = categoryMetadata[restaurant.category];
+    const markerPosition = new kakao.maps.LatLng(restaurant.lat, restaurant.lng);
     
-    const markerHtml = `
-      <div class="restaurant-pin" style="background-color: ${meta.color}; border-color: #fff;">
-        <i class="fa-solid ${meta.icon}"></i>
-      </div>
-    `;
+    // 커스텀 마커 HTML 구성
+    const markerContent = document.createElement('div');
+    markerContent.className = 'custom-restaurant-marker';
+    markerContent.innerHTML = `<div class="restaurant-pin" style="background-color: ${meta.color}; border-color: #fff;"><i class="fa-solid ${meta.icon}"></i></div>`;
     
-    const customIcon = L.divIcon({
-      className: 'custom-restaurant-marker',
-      html: markerHtml,
-      iconSize: [32, 32],
-      iconAnchor: [16, 32],
-      popupAnchor: [0, -32]
+    const marker = new kakao.maps.CustomOverlay({
+      position: markerPosition,
+      content: markerContent,
+      clickable: true
     });
     
-    const marker = L.marker([restaurant.lat, restaurant.lng], { icon: customIcon })
-      .addTo(state.map)
-      .bindPopup(`
-        <div class="map-popup-content">
-          <h4 style="font-weight: 700; margin-bottom: 4px; font-size: 0.95rem;">${restaurant.name}</h4>
-          <div style="font-size: 0.8rem; margin-bottom: 6px; color: #cbd5e1;">
-            <span style="color: ${meta.color}; font-weight:700;">${meta.emoji} ${restaurant.category}</span> | 
-            <span><i class="fa-solid fa-person-walking"></i> ${restaurant.distance}m</span>
-          </div>
-          <div style="font-size: 0.8rem; color: #94a3b8; margin-bottom: 4px;">${restaurant.address}</div>
-          <div style="font-size: 0.85rem; font-weight:700; color: #fbbf24;">
-            <i class="fa-solid fa-star"></i> ${restaurant.rating.toFixed(1)} (리뷰 ${restaurant.reviews})
-          </div>
-        </div>
-      `);
-      
-    marker.on('click', () => highlightRestaurantCard(restaurant.id));
+    // 오버레이 클릭 시 맛집 상세 정보창 팝업 및 카드 강조
+    markerContent.addEventListener('click', () => {
+      openRestaurantInfoWindow(restaurant, markerPosition);
+      highlightRestaurantCard(restaurant.id);
+    });
+    
+    marker.setMap(state.map);
     state.restaurantMarkers.push(marker);
   });
+}
+
+function openRestaurantInfoWindow(restaurant, position) {
+  if (activeInfoWindow) {
+    activeInfoWindow.close();
+  }
+  
+  const meta = categoryMetadata[restaurant.category];
+  
+  // 화이트 테마의 세련된 인포윈도우 레이아웃
+  const iwContent = `
+    <div style="padding: 12px 14px; font-family: var(--font-main); color: #0f172a; min-width: 210px; line-height: 1.4; background: #ffffff;">
+      <h4 style="font-weight: 700; margin-bottom: 4px; font-size: 0.95rem; color:#0f172a;">${restaurant.name}</h4>
+      <div style="font-size: 0.78rem; margin-bottom: 6px; color: #64748b;">
+        <span style="color: ${meta.color}; font-weight:700;">${meta.emoji} ${restaurant.category}</span> · 
+        <span><i class="fa-solid fa-person-walking"></i> ${restaurant.distance}m</span>
+      </div>
+      <div style="font-size: 0.75rem; color: #64748b; margin-bottom: 4px; word-break: break-all;">${restaurant.address}</div>
+      <div style="font-size: 0.8rem; font-weight:700; color: #fbbf24; display: flex; align-items: center; gap: 4px;">
+        <i class="fa-solid fa-star"></i> ${restaurant.rating.toFixed(1)} 
+        <span style="color:#64748b; font-weight:normal; font-size: 0.75rem;">(리뷰 ${restaurant.reviews})</span>
+      </div>
+    </div>
+  `;
+  
+  activeInfoWindow = new kakao.maps.InfoWindow({
+    position: position,
+    content: iwContent,
+    removable: true
+  });
+  
+  activeInfoWindow.open(state.map);
 }
 
 function highlightRestaurantCard(restaurantId) {
@@ -1209,12 +938,10 @@ function highlightRestaurantCard(restaurantId) {
 }
 
 function focusOnRestaurantMarker(restaurant) {
-  state.map.setView([restaurant.lat, restaurant.lng], 16);
-  const marker = state.restaurantMarkers.find(m => {
-    const latLng = m.getLatLng();
-    return Math.abs(latLng.lat - restaurant.lat) < 0.00001 && Math.abs(latLng.lng - restaurant.lng) < 0.00001;
-  });
-  if (marker) marker.openPopup();
+  const pos = new kakao.maps.LatLng(restaurant.lat, restaurant.lng);
+  state.map.setCenter(pos);
+  state.map.setLevel(3); // 줌 레벨 조정
+  openRestaurantInfoWindow(restaurant, pos);
 }
 
 // ============================================================
@@ -1264,7 +991,7 @@ function renderPresetsUI() {
     });
     pill.querySelector('.btn-delete-preset').addEventListener('click', (e) => {
       e.stopPropagation();
-      deletePreset(e.target.closest('.btn-delete-preset').getAttribute('data-id'));
+      deletePreset(e.currentTarget.getAttribute('data-id'));
     });
     DOM.favoritesPresetsList.appendChild(pill);
   });
@@ -1354,7 +1081,7 @@ function renderFavoriteRestaurantsUI() {
     `;
     item.addEventListener('click', (e) => {
       if (e.target.closest('.btn-remove-fav-rest')) return;
-      state.map.setView([restaurant.lat, restaurant.lng], 16);
+      focusOnRestaurantMarker(restaurant);
     });
     item.querySelector('.btn-remove-fav-rest').addEventListener('click', (e) => {
       e.stopPropagation();
@@ -1383,55 +1110,4 @@ function toggleFavoriteRestaurant(restaurant) {
   saveFavoriteRestaurants();
   renderFavoriteRestaurantsUI();
   renderRestaurantList();
-}
-
-// ============================================================
-// 네이버 API 사용량 트래킹
-// ============================================================
-function incrementNaverUsage(count = 1) {
-  const today = new Date().toISOString().split('T')[0];
-  let usage = { date: today, count: 0 };
-  
-  const stored = localStorage.getItem('naver_api_usage');
-  if (stored) {
-    try {
-      const parsed = JSON.parse(stored);
-      if (parsed.date === today) usage = parsed;
-    } catch (e) {}
-  }
-  
-  usage.count += count;
-  localStorage.setItem('naver_api_usage', JSON.stringify(usage));
-  renderNaverUsageUI();
-}
-
-function renderNaverUsageUI() {
-  const today = new Date().toISOString().split('T')[0];
-  let count = 0;
-  
-  const stored = localStorage.getItem('naver_api_usage');
-  if (stored) {
-    try {
-      const parsed = JSON.parse(stored);
-      if (parsed.date === today) count = parsed.count;
-    } catch (e) {}
-  }
-  
-  const countEl = document.getElementById('naver-usage-count');
-  const barEl = document.getElementById('naver-usage-bar');
-  
-  if (countEl && barEl) {
-    countEl.textContent = `${count.toLocaleString()} / 25,000`;
-    const percent = Math.min(100, (count / 25000) * 100);
-    barEl.style.width = `${percent}%`;
-    
-    // 사용량 많으면 경고 색상
-    if (percent > 80) {
-      barEl.style.background = '#ef4444';
-    } else if (percent > 50) {
-      barEl.style.background = '#f59e0b';
-    } else {
-      barEl.style.background = 'var(--naver-green)';
-    }
-  }
 }
