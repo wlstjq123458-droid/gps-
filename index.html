@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#090d16">
+  <meta name="description" content="GPS 기반 실시간 주변 음식점 탐색기. 네이버 API 연동으로 현재 위치 주변 맛집을 정확하게 찾아드립니다.">
+  <title>가까운 맛집 탐색기 - GPS 기반 주변 음식점</title>
+  
+  <!-- Google Fonts: Outfit & Noto Sans KR -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;900&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  
+  <!-- FontAwesome for Premium Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  
+  <!-- Leaflet Map CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+  
+  <!-- Custom Styling -->
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-container">
+    
+    <!-- Header -->
+    <header class="app-header">
+      <div class="header-logo">
+        <i class="fa-solid fa-utensils logo-icon"></i>
+        <h1>가까운 맛집 탐색기</h1>
+      </div>
+      <p class="header-subtitle">GPS 기반 실시간 주변 음식점 추천 — 네이버 API 연동</p>
+    </header>
+
+    <!-- Main Content Area -->
+    <main class="app-content">
+      
+      <!-- Left Control Panel -->
+      <section class="control-panel glass-card">
+        
+        <!-- Naver API Settings (항상 표시) -->
+        <div id="naver-settings" class="naver-settings-box">
+          <div class="section-title">
+            <i class="fa-brands fa-neos"></i>
+            <h3>네이버 API 연동 설정</h3>
+          </div>
+          <div class="input-group">
+            <label for="naver-client-id">Client ID</label>
+            <input type="text" id="naver-client-id" placeholder="네이버 개발자 센터 Client ID 입력" value="fiSqoRFY0krGn2gol2dj">
+          </div>
+          <div class="input-group">
+            <label for="naver-client-secret">Client Secret</label>
+            <input type="password" id="naver-client-secret" placeholder="Client Secret 입력" value="LaeTebV4E4">
+          </div>
+          
+          <!-- Naver API 일일 사용량 표시 -->
+          <div class="naver-api-usage" id="naver-api-usage">
+            <div class="usage-header">
+              <span>오늘 네이버 API 호출 수:</span>
+              <span id="naver-usage-count">0 / 25,000</span>
+            </div>
+            <div class="usage-bar-bg">
+              <div id="naver-usage-bar" class="usage-bar-fill"></div>
+            </div>
+          </div>
+
+          <p class="api-help-text">
+            <i class="fa-solid fa-circle-info"></i>
+            Client ID/Secret 입력 시 네이버 API로 실제 음식점을 검색합니다. 미입력 시 현재 위치 기반 시뮬레이션 데이터로 동작합니다.
+          </p>
+        </div>
+
+        <!-- Geolocation Activation Section -->
+        <div class="geo-section">
+          <div class="geo-status" id="geo-status-text">
+            <i class="fa-solid fa-location-dot"></i> GPS 위치를 확인해 주세요.
+          </div>
+          <button id="btn-get-location" class="btn-primary animate-pulse">
+            <i class="fa-solid fa-location-crosshairs"></i> 현재 위치 탐색하기
+          </button>
+
+          <button id="btn-lock-location" class="btn-lock">
+            <i class="fa-solid fa-lock-open" id="lock-icon"></i>
+            <span id="lock-label">실시간 위치 고정하기</span>
+          </button>
+          
+          <div class="coords-display hidden" id="coords-display">
+            <span><strong>위도:</strong> <span id="val-lat">35.14570</span></span>
+            <span><strong>경도:</strong> <span id="val-lng">129.00720</span></span>
+          </div>
+        </div>
+
+        <!-- Radius Selector -->
+        <div class="radius-section">
+          <div class="section-title-row">
+            <div class="section-title">
+              <i class="fa-solid fa-circle-nodes"></i>
+              <h3>검색 반경</h3>
+            </div>
+            <span class="range-value" id="range-value-display">750m</span>
+          </div>
+          <div class="range-slider-container">
+            <input type="range" id="input-radius" min="500" max="1000" step="50" value="750" class="range-slider">
+            <div class="range-labels">
+              <span>500m</span>
+              <span>750m</span>
+              <span>1.0km</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Category Selector (Multi-select) -->
+        <div class="category-section">
+          <div class="section-title">
+            <i class="fa-solid fa-filter"></i>
+            <h3>음식 종류 선택 (중복 가능)</h3>
+          </div>
+          <div class="category-grid" id="category-grid">
+            <button class="category-chip" data-category="한식">
+              <span class="chip-emoji">🇰🇷</span>
+              <span class="chip-label">한식</span>
+            </button>
+            <button class="category-chip" data-category="중식">
+              <span class="chip-emoji">🇨🇳</span>
+              <span class="chip-label">중식</span>
+            </button>
+            <button class="category-chip" data-category="일식">
+              <span class="chip-emoji">🇯🇵</span>
+              <span class="chip-label">일식</span>
+            </button>
+            <button class="category-chip" data-category="분식">
+              <span class="chip-emoji">🍢</span>
+              <span class="chip-label">분식</span>
+            </button>
+            <button class="category-chip" data-category="치킨">
+              <span class="chip-emoji">🍗</span>
+              <span class="chip-label">치킨</span>
+            </button>
+            <button class="category-chip" data-category="피자">
+              <span class="chip-emoji">🍕</span>
+              <span class="chip-label">피자</span>
+            </button>
+            <button class="category-chip" data-category="햄버거">
+              <span class="chip-emoji">🍔</span>
+              <span class="chip-label">햄버거</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Favorites / Presets Section -->
+        <div class="favorites-section">
+          <div class="section-title-row">
+            <div class="section-title">
+              <i class="fa-solid fa-star"></i>
+              <h3>즐겨찾는 카테고리 조합</h3>
+            </div>
+          </div>
+          
+          <div id="favorites-presets-list" class="favorites-presets-list">
+            <!-- Dynamic presets go here -->
+          </div>
+          
+          <div class="add-preset-box">
+            <input type="text" id="input-preset-name" placeholder="조합 이름 (예: 퇴근후 야식)" maxlength="15">
+            <button id="btn-save-preset" class="btn-secondary">
+              <i class="fa-solid fa-plus"></i> 추가
+            </button>
+          </div>
+        </div>
+
+        <!-- Favorite Restaurants Section -->
+        <div class="favorites-section fav-restaurants-section" style="margin-top: 12px; border-top: 1px solid rgba(255, 255, 255, 0.05); padding-top: 16px;">
+          <div class="section-title">
+            <i class="fa-solid fa-heart" style="color: #f43f5e;"></i>
+            <h3>즐겨찾는 맛집 목록</h3>
+          </div>
+          <div id="fav-restaurants-list" class="fav-restaurants-list" style="display: flex; flex-direction: column; gap: 8px; margin-top: 8px; max-height: 200px; overflow-y: auto; scrollbar-width: thin;">
+            <!-- Dynamic favorite restaurants go here -->
+            <p class="empty-fav-text" style="font-size: 0.8rem; color: var(--text-muted); text-align: center; padding: 12px 0;">즐겨찾는 맛집이 없습니다.</p>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- Right Display Area (Map & Lists) -->
+      <section class="display-panel">
+        
+        <!-- Map Card -->
+        <div class="map-card glass-card">
+          <div id="map"></div>
+          <div class="map-overlay-info" id="map-overlay-info">
+            <i class="fa-solid fa-info-circle"></i> 지도를 클릭하거나 파란색 핀을 드래그하여 탐색 기준 위치를 변경해보세요.
+          </div>
+        </div>
+
+        <!-- List Operations Bar -->
+        <div class="list-operations-bar">
+          <div class="results-count" id="results-count">
+            검색 결과: <span id="count-num">0</span>개 음식점
+          </div>
+          
+          <!-- Category Active Pills (Filters results from selected) -->
+          <div class="active-category-filters" id="active-category-filters">
+            <!-- Active filter buttons dynamically generated here -->
+          </div>
+
+          <!-- Sorting Controls -->
+          <div class="sort-controls">
+            <button class="sort-btn active" data-sort="distance">
+              <i class="fa-solid fa-arrow-down-short-wide"></i> 거리순
+            </button>
+            <button class="sort-btn" data-sort="rating">
+              <i class="fa-solid fa-star-half-stroke"></i> 추천순 (평점)
+            </button>
+            <button class="sort-btn" data-sort="reviews">
+              <i class="fa-solid fa-comments"></i> 리뷰순
+            </button>
+          </div>
+        </div>
+
+        <!-- Restaurant List Grid / Feed -->
+        <div class="restaurant-list-container" id="restaurant-list-container">
+          
+          <!-- Empty State -->
+          <div class="empty-state" id="list-empty-state">
+            <i class="fa-solid fa-map-location-dot empty-icon"></i>
+            <h3>맛집을 발견해보세요!</h3>
+            <p>상단의 카테고리를 선택한 후 <strong>[현재 위치 탐색하기]</strong> 버튼을 클릭하여 주변 맛집 정보를 불러오세요.</p>
+          </div>
+
+          <!-- Loading State -->
+          <div class="loading-state hidden" id="list-loading-state">
+            <div class="spinner"></div>
+            <p id="loading-text">주변의 맛있는 가게를 찾고 있어요...</p>
+          </div>
+
+          <!-- Restaurant Cards Feed -->
+          <div class="restaurant-cards-feed hidden" id="restaurant-cards-feed">
+            <!-- Dynamic Restaurant Cards -->
+          </div>
+
+        </div>
+
+      </section>
+      
+    </main>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+      <p>&copy; 2026 가까운 맛집 탐색기. GPS 기반 맛집 큐레이팅 시스템 (네이버 API 연동)</p>
+    </footer>
+  </div>
+
+  <!-- Leaflet Map JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  
+  <!-- Custom JS Application Logic -->
+  <script src="app.js"></script>
+</body>
+</html>

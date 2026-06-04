@@ -1,0 +1,16 @@
+{
+  "appId": "com.sutn.nearbyrestaurants",
+  "appName": "가까운 맛집 탐색기",
+  "webDir": "www",
+  "bundledWebRuntime": false,
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 0
+    }
+  },
+  "android": {
+    "allowMixedContent": true,
+    "captureInput": true,
+    "webContentsDebuggingEnabled": true
+  }
+}

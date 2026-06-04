@@ -1,0 +1,24 @@
+{
+  "name": "가까운 맛집 탐색기",
+  "scripts": {
+    "build": "node build.js",
+    "start": "npx -y http-server www -p 8080",
+    "dev": "npx -y http-server www -p 8080"
+  },
+  "description": "GPS 기반 주변 음식점 탐색 앱",
+  "keywords": [
+    "gps",
+    "restaurant",
+    "korean",
+    "mobile",
+    "capacitor"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@capacitor/android": "^6.2.1",
+    "@capacitor/core": "^6.2.1"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.2.1"
+  }
+}
