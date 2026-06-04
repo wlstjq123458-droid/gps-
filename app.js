@@ -91,7 +91,16 @@ const DOM = {
   restaurantListContainer: document.getElementById('restaurant-list-container'),
   listEmptyState: document.getElementById('list-empty-state'),
   listLoadingState: document.getElementById('list-loading-state'),
-  restaurantCardsFeed: document.getElementById('restaurant-cards-feed')
+  restaurantCardsFeed: document.getElementById('restaurant-cards-feed'),
+  
+  btnAdminLogin: document.getElementById('btn-admin-login'),
+  adminModal: document.getElementById('admin-modal'),
+  btnCloseAdminModal: document.getElementById('btn-close-admin-modal'),
+  btnSubmitAdmin: document.getElementById('btn-submit-admin'),
+  adminPasswordInput: document.getElementById('admin-password-input'),
+  naverSettings: document.getElementById('naver-settings'),
+  inputAddress: document.getElementById('input-address'),
+  btnSearchAddress: document.getElementById('btn-search-address')
 };
 
 // ============================================================
@@ -103,6 +112,11 @@ document.addEventListener('DOMContentLoaded', () => {
   loadFavoriteRestaurants();
   setupEventListeners();
   renderNaverUsageUI();
+  
+  // 관리자 인증 여부 복구
+  if (sessionStorage.getItem('isAdminAuthenticated') === 'true') {
+    if (DOM.naverSettings) DOM.naverSettings.classList.remove('hidden');
+  }
   
   // 기본 카테고리: 한식 + 일식 선택
   state.selectedCategories.add('한식');
@@ -119,7 +133,7 @@ function initMap() {
     attributionControl: false
   }).setView([state.currentCoords.lat, state.currentCoords.lng], 15);
 
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
     maxZoom: 19
   }).addTo(state.map);
 
@@ -207,6 +221,112 @@ function setupEventListeners() {
       sortAndRenderRestaurants();
     });
   });
+
+  // 관리자 모드 로그인 이벤트
+  if (DOM.btnAdminLogin) {
+    DOM.btnAdminLogin.addEventListener('click', () => {
+      if (DOM.naverSettings.classList.contains('hidden')) {
+        DOM.adminModal.classList.remove('hidden');
+        DOM.adminPasswordInput.focus();
+      } else {
+        DOM.naverSettings.classList.add('hidden');
+        sessionStorage.removeItem('isAdminAuthenticated');
+        showToast('<i class="fa-solid fa-lock"></i>&nbsp; 관리자 설정 창이 숨겨졌습니다.', 'lock', 2200);
+      }
+    });
+  }
+  if (DOM.btnCloseAdminModal) {
+    DOM.btnCloseAdminModal.addEventListener('click', () => {
+      DOM.adminModal.classList.add('hidden');
+      DOM.adminPasswordInput.value = '';
+    });
+  }
+  if (DOM.btnSubmitAdmin) {
+    DOM.btnSubmitAdmin.addEventListener('click', handleAdminLogin);
+  }
+  if (DOM.adminPasswordInput) {
+    DOM.adminPasswordInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') handleAdminLogin();
+    });
+  }
+  
+  // 외부 클릭 시 모달 닫기
+  window.addEventListener('click', (e) => {
+    if (e.target === DOM.adminModal) {
+      DOM.adminModal.classList.add('hidden');
+      DOM.adminPasswordInput.value = '';
+    }
+  });
+
+  // 주소 검색 이벤트
+  if (DOM.btnSearchAddress) {
+    DOM.btnSearchAddress.addEventListener('click', handleAddressSearch);
+  }
+  if (DOM.inputAddress) {
+    DOM.inputAddress.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') handleAddressSearch();
+    });
+  }
+}
+
+function handleAdminLogin() {
+  const val = DOM.adminPasswordInput.value.trim();
+  if (val === '1111') {
+    DOM.naverSettings.classList.remove('hidden');
+    DOM.adminModal.classList.add('hidden');
+    DOM.adminPasswordInput.value = '';
+    showToast('<i class="fa-solid fa-lock-open"></i>&nbsp; 관리자 인증 성공! 네이버 API 설정 활성화.', 'success', 2500);
+    sessionStorage.setItem('isAdminAuthenticated', 'true');
+  } else {
+    showToast('<i class="fa-solid fa-triangle-exclamation"></i>&nbsp; 비밀번호가 일치하지 않습니다.', 'lock', 2500);
+    DOM.adminPasswordInput.value = '';
+    DOM.adminPasswordInput.focus();
+  }
+}
+
+async function handleAddressSearch() {
+  const address = DOM.inputAddress.value.trim();
+  if (!address) {
+    showToast('<i class="fa-solid fa-triangle-exclamation"></i>&nbsp; 검색할 주소를 입력해 주세요.', 'lock', 2500);
+    return;
+  }
+  
+  DOM.geoStatusText.className = 'geo-status loading';
+  DOM.geoStatusText.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> "${address}" 검색 중...`;
+  
+  const result = await fetchGeocodeNominatim(address);
+  if (result) {
+    showToast(`<i class="fa-solid fa-magnifying-glass-location"></i>&nbsp; 주소 검색 성공: ${result.roadAddress.split(',')[0]}`, 'success', 3000);
+    updateLocationCoords(result.lat, result.lng, false);
+  } else {
+    DOM.geoStatusText.className = 'geo-status error';
+    DOM.geoStatusText.innerHTML = '<i class="fa-solid fa-circle-xmark"></i> 주소를 찾을 수 없습니다.';
+    showToast(`<i class="fa-solid fa-circle-exclamation"></i>&nbsp; "${address}" 주소를 찾을 수 없습니다.`, 'lock', 2800);
+  }
+}
+
+async function fetchGeocodeNominatim(address) {
+  const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}&accept-language=ko`;
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': 'NearbyRestaurantsApp/1.0'
+      }
+    });
+    if (!res.ok) throw new Error('Nominatim Geocoding API Error');
+    const data = await res.json();
+    if (data && data.length > 0) {
+      return {
+        lat: parseFloat(data[0].lat),
+        lng: parseFloat(data[0].lon),
+        roadAddress: data[0].display_name
+      };
+    }
+    return null;
+  } catch (e) {
+    console.error('[Nominatim Geocoding 실패]', e);
+    return null;
+  }
 }
 
 // ============================================================
@@ -954,6 +1074,9 @@ function renderRestaurantList() {
     card.className = 'restaurant-card';
     card.setAttribute('data-id', restaurant.id);
     
+    const regionName = (getLocationName(restaurant.lat, restaurant.lng) || '부산');
+    const blogSearchUrl = `https://search.naver.com/search.naver?where=blog&query=${encodeURIComponent(restaurant.name + ' ' + regionName + ' 맛집')}`;
+
     card.innerHTML = `
       <div class="card-header-row">
         <span class="card-category-badge">${meta.emoji} ${restaurant.category}${isMock ? ' <small style="opacity:0.5;font-size:0.65rem">(추천)</small>' : ''}</span>
@@ -976,6 +1099,9 @@ function renderRestaurantList() {
         </button>
         <button class="card-btn btn-find-way" data-lat="${restaurant.lat}" data-lng="${restaurant.lng}">
           <i class="fa-solid fa-map-location-dot"></i> 길찾기
+        </button>
+        <button class="card-btn btn-blog" data-url="${blogSearchUrl}">
+          <i class="fa-solid fa-blog"></i> 블로그
         </button>
       </div>
     `;
@@ -1007,6 +1133,13 @@ function renderRestaurantList() {
       // 네이버 지도 길찾기 연동
       const naverMapUrl = `https://map.naver.com/v5/directions/-/${rLng},${rLat},${encodeURIComponent(restaurant.name)},,/walk?c=15,0,0,0,dh`;
       window.open(naverMapUrl, '_blank');
+    });
+
+    card.querySelector('.btn-blog').addEventListener('click', (e) => {
+      e.stopPropagation();
+      const url = e.target.closest('.btn-blog').getAttribute('data-url');
+      window.open(url, '_blank');
+      showToast('<i class="fa-solid fa-blog"></i>&nbsp; 네이버 블로그 검색 결과를 엽니다', 'success', 2000);
     });
     
     DOM.restaurantCardsFeed.appendChild(card);
