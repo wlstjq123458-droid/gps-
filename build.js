@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const files = ['index.html', 'style.css', 'app.js', 'restaurants_static.json'];
+const files = ['index.html', 'style.css', 'app.js'];
 const destDir = path.join(__dirname, 'www');
 
 if (!fs.existsSync(destDir)) {
