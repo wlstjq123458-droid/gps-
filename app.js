@@ -17,6 +17,9 @@ const state = {
   searchRadius: 750,
   selectedCategories: new Set(),
   restaurants: [],
+  rawFetchedRestaurants: [], // 버전 1 실시간 전체 데이터 백업용
+  staticRestaurants: [],     // 버전 2 주례·냉정 고정 데이터 로드용
+  appVersion: 1,             // 1: 실시간 API, 2: 주례·냉정 고정
   activeFilter: 'all',
   currentSort: 'distance',
   presets: [],
@@ -100,6 +103,9 @@ document.addEventListener('DOMContentLoaded', () => {
     return;
   }
 
+  // 버전 2용 정적 데이터 미리 로드
+  loadStaticRestaurants();
+
   // kakao.maps.load() 콜백 안에서 안전하게 지도 초기화
   kakao.maps.load(() => {
     initMap();
@@ -113,6 +119,21 @@ document.addEventListener('DOMContentLoaded', () => {
     updateCategoryChipsUI();
   });
 });
+
+// ============================================================
+// 버전 2용 정적 데이터 로더
+// ============================================================
+async function loadStaticRestaurants() {
+  try {
+    const response = await fetch('restaurants_static.json');
+    if (!response.ok) throw new Error('데이터 응답 상태 불량');
+    state.staticRestaurants = await response.json();
+    console.log(`[Static Data] ${state.staticRestaurants.length}개 정적 음식점 로드 완료`);
+  } catch (err) {
+    console.error('[Static Data] 정적 음식점 파일 로드 실패:', err);
+    showToast('⚠️ 주례·냉정 고정 음식점 데이터를 불러오지 못했습니다.', 'lock', 3000);
+  }
+}
 
 // ============================================================
 // SDK 로드 실패 시 안내 UI 표시
@@ -201,6 +222,10 @@ function initMap() {
   // 지도 생성
   state.map = new kakao.maps.Map(container, options);
   
+  // 마우스 휠 줌 및 드래그 강제 활성화 (사용자 요구사항)
+  state.map.setZoomable(true);
+  state.map.setDraggable(true);
+  
   // 지도 컨트롤 추가 (줌 컨트롤)
   const zoomControl = new kakao.maps.ZoomControl();
   state.map.addControl(zoomControl, kakao.maps.ControlPosition.RIGHT);
@@ -228,8 +253,18 @@ function initMap() {
   });
   state.radiusCircle.setMap(state.map);
 
-  // 지도 클릭 이벤트 (기준 위치 이동)
+  // 지도 단일 클릭 이벤트 (기준 위치 이동)
   kakao.maps.event.addListener(state.map, 'click', function(mouseEvent) {
+    if (state.isLocationLocked) {
+      showToast('<i class="fa-solid fa-lock"></i>&nbsp; 위치 고정 중입니다. 먼저 고정을 해제하세요.', 'lock', 2200);
+      return;
+    }
+    const latlng = mouseEvent.latLng;
+    updateLocationCoords(latlng.getLat(), latlng.getLng(), false);
+  });
+
+  // 지도 더블 클릭 이벤트 - 클릭 2번 한 곳으로 위치 변경 (사용자 요구사항)
+  kakao.maps.event.addListener(state.map, 'dblclick', function(mouseEvent) {
     if (state.isLocationLocked) {
       showToast('<i class="fa-solid fa-lock"></i>&nbsp; 위치 고정 중입니다. 먼저 고정을 해제하세요.', 'lock', 2200);
       return;
@@ -245,6 +280,14 @@ function initMap() {
 function setupEventListeners() {
   DOM.btnGetLocation.addEventListener('click', handleGetLocation);
   DOM.btnLockLocation.addEventListener('click', toggleLocationLock);
+
+  // 버전 전환 버튼 바인딩
+  const btnV1 = document.getElementById('btn-version-1');
+  const btnV2 = document.getElementById('btn-version-2');
+  if (btnV1 && btnV2) {
+    btnV1.addEventListener('click', () => switchVersion(1));
+    btnV2.addEventListener('click', () => switchVersion(2));
+  }
   
   DOM.inputRadius.addEventListener('input', (e) => {
     const radius = parseInt(e.target.value);
@@ -265,8 +308,10 @@ function setupEventListeners() {
         state.selectedCategories.add(category);
       }
       updateCategoryChipsUI();
-      if (state.lastSearchCoords.lat !== 0) {
-        fetchNearbyRestaurants();
+      
+      // API를 재조회하지 않고, 메모리에 저장된 데이터로 즉시 화면 필터링만 수행
+      if (state.lastSearchCoords.lat !== 0 || state.restaurants.length > 0) {
+        postFetchProcess();
       }
     });
   });
@@ -294,6 +339,28 @@ function setupEventListeners() {
     DOM.inputAddress.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') handleAddressSearch();
     });
+  }
+}
+
+// ============================================================
+// 버전 전환 제어
+// ============================================================
+function switchVersion(version) {
+  if (state.appVersion === version) return;
+  state.appVersion = version;
+
+  const btnV1 = document.getElementById('btn-version-1');
+  const btnV2 = document.getElementById('btn-version-2');
+  if (btnV1 && btnV2) {
+    btnV1.classList.toggle('active', version === 1);
+    btnV2.classList.toggle('active', version === 2);
+  }
+
+  showToast(`🗺️ <b>버전 ${version}</b> (${version === 1 ? '실시간 API' : '주례·냉정 고정'})으로 전환 완료!`, 'success', 2500);
+
+  // 위치 탐색이 이미 완료된 상태라면, 선택된 버전에 맞게 즉시 리스트를 재구축합니다.
+  if (state.currentCoords.lat !== 0) {
+    fetchNearbyRestaurants();
   }
 }
 
@@ -614,74 +681,92 @@ async function fetchNearbyRestaurants() {
   
   const { lat, lng } = state.currentCoords;
   const radius = state.searchRadius;
-  const keywords = Array.from(state.selectedCategories);
-  
-  if (keywords.length === 0) {
-    state.restaurants = [];
-    postFetchProcess();
-    showLoading(false);
-    return;
-  }
   
   try {
-    // 1. 역지오코딩을 이용해 탐색할 동네 이름 획득
+    // 1. 역지오코딩을 이용해 현재 탐색 주소 획득
     const locationName = await getRegionNameFromCoords(lat, lng);
     const addressDetail = await getAddressFromCoords(lat, lng);
     
-    // UI 주소창 업데이트
+    // UI 주소 정보 업데이트
     DOM.geoStatusText.className = 'geo-status success';
     DOM.geoStatusText.innerHTML = `<i class="fa-solid fa-circle-check"></i> ${addressDetail.split(' ').slice(0,3).join(' ')}`;
-    showToast(`<i class="fa-solid fa-map-pin"></i>&nbsp; ${locationName} 맛집 찾는 중...`, 'success', 1800);
     
-    // 2. 카카오 로컬 키워드 병렬 검색
-    const searchPromises = keywords.map(keyword => {
-      let queryKeyword = keyword;
-      if (keyword === '햄버거') queryKeyword = '버거';
-      return searchPlacesPromise(queryKeyword, lat, lng, radius)
-        .then(docs => ({ category: keyword, docs }));
-    });
-    
-    const results = await Promise.all(searchPromises);
-    
-    const allRestaurants = [];
-    results.forEach(({ category, docs }) => {
-      docs.forEach(doc => {
-        const docId = `kakao_${doc.id}`;
-        
-        // 중복 장소 스킵
-        if (allRestaurants.some(r => r.id === docId)) return;
-        
-        // 카카오 데이터가 제공하는 위경도 정보 확인
-        const itemLat = parseFloat(doc.y);
-        const itemLng = parseFloat(doc.x);
-        const distance = parseInt(doc.distance) || Math.round(calculateDistance(lat, lng, itemLat, itemLng));
-        
-        // 탐색 반경 확인 후 적합한 맛집만 포함
-        if (distance > radius) return;
-        
-        allRestaurants.push({
-          id: docId,
-          name: doc.place_name,
-          category: category,
-          lat: itemLat,
-          lng: itemLng,
-          distance: distance,
-          rating: parseFloat((4.0 + Math.random() * 1.0).toFixed(1)), // 평점 시뮬레이션
-          reviews: Math.floor(Math.random() * 180) + 6,
-          telephone: doc.phone || '정보 없음',
-          address: doc.road_address_name || doc.address_name || '주소 정보 없음',
-          source: 'kakao'
+    if (state.appVersion === 1) {
+      // --------------------------------------------------
+      // 버전 1: 실시간 카카오 API로 모든 카테고리 음식점 긁어오기
+      // --------------------------------------------------
+      showToast(`<i class="fa-solid fa-earth-asia"></i>&nbsp; 실시간 API로 주변 맛집 수집 중...`, 'success', 2200);
+
+      // 전체 카테고리 키워드
+      const allCategoryKeywords = ['한식', '중식', '일식', '분식', '치킨', '피자', '햄버거'];
+      
+      const searchPromises = allCategoryKeywords.map(keyword => {
+        let queryKeyword = keyword;
+        if (keyword === '햄버거') queryKeyword = '버거';
+        return searchPlacesPromise(queryKeyword, lat, lng, radius)
+          .then(docs => ({ category: keyword, docs }));
+      });
+      
+      const results = await Promise.all(searchPromises);
+      const allRestaurants = [];
+      
+      results.forEach(({ category, docs }) => {
+        docs.forEach(doc => {
+          const docId = `kakao_${doc.id}`;
+          if (allRestaurants.some(r => r.id === docId)) return;
+          
+          const itemLat = parseFloat(doc.y);
+          const itemLng = parseFloat(doc.x);
+          const distance = parseInt(doc.distance) || Math.round(calculateDistance(lat, lng, itemLat, itemLng));
+          
+          if (distance > radius) return;
+          
+          allRestaurants.push({
+            id: docId,
+            name: doc.place_name,
+            category: category,
+            lat: itemLat,
+            lng: itemLng,
+            distance: distance,
+            rating: parseFloat((4.0 + Math.random() * 1.0).toFixed(1)),
+            reviews: Math.floor(Math.random() * 180) + 6,
+            telephone: doc.phone || '정보 없음',
+            address: doc.road_address_name || doc.address_name || '주소 정보 없음',
+            source: 'kakao'
+          });
         });
       });
-    });
+      
+      state.rawFetchedRestaurants = allRestaurants;
+      state.restaurants = allRestaurants;
+      
+    } else {
+      // --------------------------------------------------
+      // 버전 2: 주례, 냉정 지역 고정 데이터 로드
+      // --------------------------------------------------
+      showToast(`<i class="fa-solid fa-database"></i>&nbsp; 주례·냉정 고정 음식점 정보 로드 완료!`, 'success', 2200);
+      
+      if (state.staticRestaurants.length === 0) {
+        // 백업 로딩 재시도
+        await loadStaticRestaurants();
+      }
+
+      // 고정 데이터를 기반으로 현재 위치와의 거리를 다시 하버사인으로 실시간 계산하여 바인딩
+      const updatedStaticData = state.staticRestaurants.map(item => {
+        const distance = Math.round(calculateDistance(lat, lng, item.lat, item.lng));
+        return {
+          ...item,
+          distance: distance
+        };
+      });
+
+      state.restaurants = updatedStaticData;
+    }
     
-    // 맛집 목록 상태에 추가
-    state.restaurants = allRestaurants;
-    
-    // 포스트 프로세스 실행 (Mock data 추가 등은 완전히 생략됨)
+    // 포스트 프로세스 실행
     postFetchProcess();
   } catch (error) {
-    console.error('카카오 로컬 음식점 로딩 실패:', error);
+    console.error('음식점 정보 획득 실패:', error);
     state.restaurants = [];
     postFetchProcess();
   } finally {
@@ -692,17 +777,32 @@ async function fetchNearbyRestaurants() {
 // ============================================================
 // 로드 후 처리 (필터바 + 정렬 + 렌더링)
 // ============================================================
+function getFilteredRestaurants() {
+  // 1단계: 사용자가 선택한 카테고리에 속하는 맛집 필터링
+  const categoryFiltered = state.restaurants.filter(r => state.selectedCategories.has(r.category));
+  
+  // 2단계: 상단 탭 필터바 세부 필터링
+  if (state.activeFilter === 'all') {
+    return categoryFiltered;
+  }
+  return categoryFiltered.filter(r => r.category === state.activeFilter);
+}
+
 function postFetchProcess() {
-  DOM.countNum.textContent = state.restaurants.length;
+  // 사용자가 선택한 카테고리에 속하는 전체 개수 계산
+  const categoryFiltered = state.restaurants.filter(r => state.selectedCategories.has(r.category));
+  DOM.countNum.textContent = categoryFiltered.length;
   DOM.activeCategoryFilters.innerHTML = '';
   
-  if (state.restaurants.length > 0) {
+  if (state.selectedCategories.size > 0 && state.restaurants.length > 0) {
+    // '전체' 필터 알약
     const allPill = document.createElement('button');
     allPill.className = `active-filter-pill ${state.activeFilter === 'all' ? 'active' : ''}`;
-    allPill.textContent = `전체 (${state.restaurants.length})`;
+    allPill.textContent = `전체 (${categoryFiltered.length})`;
     allPill.addEventListener('click', () => selectActiveFilter('all'));
     DOM.activeCategoryFilters.appendChild(allPill);
     
+    // 개별 선택 카테고리 알약들
     state.selectedCategories.forEach(cat => {
       const catRestaurants = state.restaurants.filter(r => r.category === cat);
       const pill = document.createElement('button');
@@ -755,15 +855,13 @@ function sortAndRenderRestaurants() {
 function renderRestaurantList() {
   DOM.restaurantCardsFeed.innerHTML = '';
   
-  const filtered = state.activeFilter === 'all'
-    ? state.restaurants
-    : state.restaurants.filter(r => r.category === state.activeFilter);
+  const filtered = getFilteredRestaurants();
     
   if (filtered.length === 0) {
     DOM.restaurantCardsFeed.classList.add('hidden');
     DOM.listEmptyState.classList.remove('hidden');
     DOM.listEmptyState.querySelector('h3').textContent = '해당 음식점이 없습니다!';
-    DOM.listEmptyState.querySelector('p').textContent = '검색 반경을 넓히거나 다른 음식 종류를 선택해 보세요.';
+    DOM.listEmptyState.querySelector('p').textContent = '상단의 음식 종류를 더 선택하거나 검색 반경을 조절해 보세요.';
     return;
   }
   
@@ -823,7 +921,7 @@ function renderRestaurantList() {
     card.querySelector('.btn-call').addEventListener('click', (e) => {
       e.stopPropagation();
       const phone = e.currentTarget.getAttribute('data-phone');
-      if (phone && phone !== '정보 없음') {
+      if (phone && phone !== '정보 없음' && phone !== '정보없음') {
         window.location.href = `tel:${phone.replace(/-/g, '')}`;
       } else {
         alert(`[안내] '${restaurant.name}' 매장 전화번호 정보가 없습니다.`);
@@ -834,7 +932,6 @@ function renderRestaurantList() {
       e.stopPropagation();
       const rLat = e.currentTarget.getAttribute('data-lat');
       const rLng = e.currentTarget.getAttribute('data-lng');
-      // 카카오 맵 길찾기 웹 페이지 연동
       const kakaoMapUrl = `https://map.kakao.com/link/to/${encodeURIComponent(restaurant.name)},${rLat},${rLng}`;
       window.open(kakaoMapUrl, '_blank');
     });
@@ -862,9 +959,7 @@ function updateMapMarkers() {
     activeInfoWindow.close();
   }
   
-  const filtered = state.activeFilter === 'all'
-    ? state.restaurants
-    : state.restaurants.filter(r => r.category === state.activeFilter);
+  const filtered = getFilteredRestaurants();
     
   filtered.forEach(restaurant => {
     const meta = categoryMetadata[restaurant.category];
@@ -982,8 +1077,8 @@ function renderPresetsUI() {
       state.selectedCategories.clear();
       preset.categories.forEach(cat => state.selectedCategories.add(cat));
       updateCategoryChipsUI();
-      if (state.lastSearchCoords.lat !== 0) {
-        fetchNearbyRestaurants();
+      if (state.lastSearchCoords.lat !== 0 || state.restaurants.length > 0) {
+        postFetchProcess();
       } else {
         DOM.geoStatusText.className = 'geo-status';
         DOM.geoStatusText.innerHTML = `<i class="fa-solid fa-location-dot"></i> [${preset.name}] 선택 완료. 위치 탐색을 시작하세요!`;
