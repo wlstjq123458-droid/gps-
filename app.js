@@ -527,7 +527,7 @@ function handleGetLocation() {
   navigator.geolocation.getCurrentPosition(
     handleGeoSuccess,
     handleGeoError,
-    { enableHighAccuracy: true, timeout: 10000, maximumAge: 3000 }
+    { enableHighAccuracy: false, timeout: 8000, maximumAge: 10000 }
   );
 }
 
@@ -654,47 +654,95 @@ async function fetchNearbyRestaurants() {
     DOM.geoStatusText.innerHTML = `<i class="fa-solid fa-circle-check"></i> ${addressDetail.split(' ').slice(0,3).join(' ')}`;
     showToast(`<i class="fa-solid fa-earth-asia"></i>&nbsp; ${locationName} 주변 맛집 수집 중...`, 'success', 2200);
 
-    // 전체 카테고리 병렬 검색
-    const allCategoryKeywords = ['한식', '중식', '일식', '분식', '치킨', '피자', '햄버거'];
-    
-    const searchPromises = allCategoryKeywords.map(keyword => {
-      let queryKeyword = keyword;
-      if (keyword === '햄버거') queryKeyword = '버거';
-      return searchPlacesPromise(queryKeyword, lat, lng, radius)
-        .then(docs => ({ category: keyword, docs }));
-    });
-    
-    const results = await Promise.all(searchPromises);
-    const allRestaurants = [];
-    
-    results.forEach(({ category, docs }) => {
-      docs.forEach(doc => {
-        const docId = `kakao_${doc.id}`;
-        if (allRestaurants.some(r => r.id === docId)) return;
-        
-        const itemLat = parseFloat(doc.y);
-        const itemLng = parseFloat(doc.x);
-        const distance = parseInt(doc.distance) || Math.round(calculateDistance(lat, lng, itemLat, itemLng));
-        
-        if (distance > radius) return;
-        
-        allRestaurants.push({
-          id: docId,
-          name: doc.place_name,
-          category: category,
-          lat: itemLat,
-          lng: itemLng,
-          distance: distance,
-          rating: parseFloat((4.0 + Math.random() * 1.0).toFixed(1)),
-          reviews: Math.floor(Math.random() * 180) + 6,
-          telephone: doc.phone || '정보 없음',
-          address: doc.road_address_name || doc.address_name || '주소 정보 없음',
-          source: 'kakao'
+    // ① 카카오 음식점 카테고리(FD6) 전체 검색 + ② 카테고리별 키워드 병렬 검색
+    const categorySearches = [
+      // 카카오 공식 카테고리 코드 FD6 = 음식점
+      { category: null, keyword: null, isCategory: true },
+      // 키워드별 세부 검색
+      { category: '한식', keyword: '한식' },
+      { category: '중식', keyword: '중국집' },
+      { category: '일식', keyword: '일식' },
+      { category: '분식', keyword: '분식' },
+      { category: '치킨', keyword: '치킨' },
+      { category: '피자', keyword: '피자' },
+      { category: '햄버거', keyword: '버거' }
+    ];
+
+    // 카카오 카테고리 코드(FD6) 검색 함수
+    function searchByCategory(lat, lng, radius) {
+      return new Promise((resolve) => {
+        const ps = new kakao.maps.services.Places();
+        ps.categorySearch('FD6', function(data, status) {
+          resolve(status === kakao.maps.services.Status.OK ? (data || []) : []);
+        }, {
+          location: new kakao.maps.LatLng(lat, lng),
+          radius: radius,
+          sort: kakao.maps.services.SortBy.DISTANCE,
+          size: 15
         });
       });
+    }
+
+    const allRestaurants = [];
+    const addedIds = new Set();
+
+    function addDoc(doc, category) {
+      const docId = `kakao_${doc.id}`;
+      if (addedIds.has(docId)) return;
+      addedIds.add(docId);
+
+      const itemLat = parseFloat(doc.y);
+      const itemLng = parseFloat(doc.x);
+      // doc.distance는 카카오 API가 반환 (이미 radius 내 결과만 반환)
+      const distance = parseInt(doc.distance) || Math.round(calculateDistance(lat, lng, itemLat, itemLng));
+
+      // 카테고리 추론 (FD6 결과는 category_name으로 추론)
+      let cat = category;
+      if (!cat) {
+        const cn = (doc.category_name || '').toLowerCase();
+        if (cn.includes('한식'))      cat = '한식';
+        else if (cn.includes('중식') || cn.includes('중국')) cat = '중식';
+        else if (cn.includes('일식') || cn.includes('일본')) cat = '일식';
+        else if (cn.includes('분식'))  cat = '분식';
+        else if (cn.includes('치킨'))  cat = '치킨';
+        else if (cn.includes('피자'))  cat = '피자';
+        else if (cn.includes('버거') || cn.includes('햄버거')) cat = '햄버거';
+        else cat = '한식'; // 기타는 한식으로 처리
+      }
+
+      allRestaurants.push({
+        id: docId,
+        name: doc.place_name,
+        category: cat,
+        lat: itemLat,
+        lng: itemLng,
+        distance: distance,
+        rating: parseFloat((4.0 + Math.random() * 1.0).toFixed(1)),
+        reviews: Math.floor(Math.random() * 180) + 6,
+        telephone: doc.phone || '정보 없음',
+        address: doc.road_address_name || doc.address_name || '주소 정보 없음',
+        source: 'kakao'
+      });
+    }
+
+    // FD6 카테고리 검색 + 키워드 검색 동시 실행
+    const [categoryDocs, ...keywordResults] = await Promise.all([
+      searchByCategory(lat, lng, radius),
+      ...categorySearches.slice(1).map(({ category, keyword }) =>
+        searchPlacesPromise(keyword, lat, lng, radius).then(docs => ({ category, docs }))
+      )
+    ]);
+
+    // FD6 결과 먼저 추가 (카테고리 없음 → 추론)
+    categoryDocs.forEach(doc => addDoc(doc, null));
+
+    // 키워드 결과 추가
+    keywordResults.forEach(({ category, docs }) => {
+      docs.forEach(doc => addDoc(doc, category));
     });
-    
+
     state.restaurants = allRestaurants;
+    console.log(`[fetchNearbyRestaurants] 총 ${allRestaurants.length}개 음식점 수집`);
     postFetchProcess();
   } catch (error) {
     console.error('음식점 정보 획득 실패:', error);
