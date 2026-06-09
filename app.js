@@ -11,8 +11,8 @@
 // 1. 애플리케이션 상태 관리
 // ============================================================
 const state = {
-  currentCoords: { lat: 35.1457, lng: 129.0072 }, // 기본값: 부산 동서대학교
-  gpsCoords: { lat: 35.1457, lng: 129.0072 },      // 실제 GPS 좌표 (길찾기 출발지)
+  currentCoords: { lat: 35.1611, lng: 128.9891 }, // 기본값: 부산 냉정 (주례/냉정 맛집 기준)
+  gpsCoords: null,                               // 실제 GPS 좌표 (최초에는 없음)
   lastSearchCoords: { lat: 0, lng: 0 },
   hasGeoPermission: false,
   searchRadius: 750,
@@ -27,7 +27,8 @@ const state = {
   radiusCircle: null,
   restaurantMarkers: [],
   isLocationLocked: false,
-  watchId: null
+  watchId: null,
+  currentVersion: 2                              // 현재 버전 (기본값: 2)
 };
 
 // ============================================================
@@ -114,7 +115,11 @@ document.addEventListener('DOMContentLoaded', () => {
     updateCategoryChipsUI();
     
     // 시작 시 자동 탐색 (버전 2 요구사항)
-    fetchNearbyRestaurants();
+    if (state.currentVersion === 2) {
+      loadStaticRestaurants();
+    } else {
+      fetchNearbyRestaurants();
+    }
   });
 });
 
@@ -214,28 +219,7 @@ function initMap() {
   const zoomControl = new kakao.maps.ZoomControl();
   state.map.addControl(zoomControl, kakao.maps.ControlPosition.RIGHT);
 
-  // 현재 사용자 기준 위치 오버레이 (파란색 원형 펄스 형태)
-  const userContent = `<div class="custom-user-marker"><div class="pulse-marker" style="border-color: rgba(59, 130, 246, 0.5);"></div><div class="center-marker" style="background-color: #3b82f6; box-shadow: 0 0 10px rgba(59, 130, 246, 0.6);"></div></div>`;
-  state.userMarker = new kakao.maps.CustomOverlay({
-    position: centerPosition,
-    content: userContent,
-    xAnchor: 0.5,
-    yAnchor: 0.5
-  });
-  state.userMarker.setMap(state.map);
-
-  // 탐색 반경 원 생성
-  state.radiusCircle = new kakao.maps.Circle({
-    center: centerPosition,
-    radius: state.searchRadius,
-    strokeWeight: 1.5,
-    strokeColor: '#3b82f6',
-    strokeOpacity: 0.7,
-    strokeStyle: 'dash',
-    fillColor: '#3b82f6',
-    fillOpacity: 0.08
-  });
-  state.radiusCircle.setMap(state.map);
+  // 마커 및 반경 원은 GPS 좌표 또는 수동 설정 위치에 기반해 생성됩니다. (기본 생성 제거)
 
   // 더블클릭으로 탐색 기준 위치 이동
   // ※ 단일클릭은 위치 이동 없음 — dblclick 시 click 이벤트 2회 발생 → setCenter 중복 호출로 드래그 버그 발생
@@ -272,6 +256,14 @@ function initMap() {
 function setupEventListeners() {
   DOM.btnGetLocation.addEventListener('click', handleGetLocation);
   DOM.btnLockLocation.addEventListener('click', toggleLocationLock);
+
+  // 버전 토글 버튼 이벤트 등록
+  const btnV1 = document.getElementById('btn-version-1');
+  const btnV2 = document.getElementById('btn-version-2');
+  if (btnV1 && btnV2) {
+    btnV1.addEventListener('click', () => switchVersion(1));
+    btnV2.addEventListener('click', () => switchVersion(2));
+  }
 
   // 주변 검색 버튼 이벤트 제거
 
@@ -547,6 +539,9 @@ function handleGeoSuccess(position) {
 }
 
 function updateLocationCoords(lat, lng, isGPS = false) {
+  if (isGPS) {
+    state.gpsCoords = { lat, lng };
+  }
   state.currentCoords.lat = lat;
   state.currentCoords.lng = lng;
 
@@ -555,26 +550,54 @@ function updateLocationCoords(lat, lng, isGPS = false) {
   DOM.coordsDisplay.classList.remove('hidden');
   DOM.geoStatusText.className = 'geo-status success';
   DOM.geoStatusText.innerHTML = isGPS
-    ? `<i class="fa-solid fa-circle-check"></i> GPS 위치 확인 — [주변 검색하기] 버튼을 눌러주세요`
-    : `<i class="fa-solid fa-map-pin"></i> 위치 설정 완료 — [주변 검색하기]를 눌러주세요`;
+    ? `<i class="fa-solid fa-circle-check"></i> GPS 위치 확인 완료`
+    : `<i class="fa-solid fa-map-pin"></i> 위치 설정 완료`;
   DOM.btnGetLocation.disabled = false;
 
   if (state.map) {
     const newPos = new kakao.maps.LatLng(lat, lng);
     state.map.panTo(newPos);
 
-    if (state.userMarker) {
+    // GPS 좌표 기준으로만 마커와 원이 생기도록 처리
+    if (!state.userMarker) {
+      const userContent = `<div class="custom-user-marker"><div class="pulse-marker" style="border-color: rgba(59, 130, 246, 0.5);"></div><div class="center-marker" style="background-color: #3b82f6; box-shadow: 0 0 10px rgba(59, 130, 246, 0.6);"></div></div>`;
+      state.userMarker = new kakao.maps.CustomOverlay({
+        position: newPos,
+        content: userContent,
+        xAnchor: 0.5,
+        yAnchor: 0.5
+      });
+      state.userMarker.setMap(state.map);
+    } else {
       state.userMarker.setPosition(newPos);
-      openUserMarkerInfoWindow(isGPS);
     }
-    if (state.radiusCircle) {
+
+    if (!state.radiusCircle) {
+      state.radiusCircle = new kakao.maps.Circle({
+        center: newPos,
+        radius: state.searchRadius,
+        strokeWeight: 1.5,
+        strokeColor: '#3b82f6',
+        strokeOpacity: 0.7,
+        strokeStyle: 'dash',
+        fillColor: '#3b82f6',
+        fillOpacity: 0.08
+      });
+      state.radiusCircle.setMap(state.map);
+    } else {
       state.radiusCircle.setCenter(newPos);
       state.radiusCircle.setRadius(state.searchRadius);
     }
+    
+    openUserMarkerInfoWindow(isGPS);
   }
 
-  // 위치가 변경되면 바로 탐색
-  fetchNearbyRestaurants();
+  // 위치가 변경되면 탐색
+  if (state.currentVersion === 1) {
+    fetchNearbyRestaurants();
+  } else {
+    recalculateStaticDistances();
+  }
 }
 
 function handleGeoError(err) {
@@ -588,10 +611,12 @@ function handleGeoError(err) {
     default: errorReason = '위치 탐색 오류가 발생했습니다.'; break;
   }
   
-  showToast(`<i class="fa-solid fa-circle-exclamation"></i>&nbsp; ${errorReason}<br>부산 동서대학교 주변으로 자동 설정합니다.`, 'lock', 3500);
+  showToast(`<i class="fa-solid fa-circle-exclamation"></i>&nbsp; ${errorReason}<br>지도를 더블 클릭하여 수동으로 탐색 기준 위치를 지정하세요.`, 'lock', 3500);
 
   state.hasGeoPermission = false;
-  updateLocationCoords(35.1457, 129.0072, false);
+  DOM.btnGetLocation.disabled = false;
+  DOM.geoStatusText.className = 'geo-status error';
+  DOM.geoStatusText.innerHTML = `<i class="fa-solid fa-circle-exclamation"></i> GPS 사용 불가 — 수동 위치 지정 필요`;
 }
 
 // ============================================================
@@ -865,11 +890,15 @@ function renderRestaurantList() {
     const blogSearchUrl = `https://search.naver.com/search.naver?where=blog&query=${encodeURIComponent(restaurant.name + ' ' + regionName + ' 맛집')}`;
 
     // 예상 소요시간 계산 (도보: 80m/분 ≈ 4.8km/h, 차량: 300m/분 ≈ 18km/h)
-    const walkMin = Math.ceil(restaurant.distance / 80);
-    const carMin  = Math.ceil(restaurant.distance / 300);
-    const timeText = walkMin <= 20
-      ? `🚶 도보 약 <b>${walkMin}분</b>`
-      : `🚶 도보 ${walkMin}분 &nbsp;|&nbsp; 🚗 차량 약 <b>${carMin}분</b>`;
+    const hasDistance = restaurant.distance && restaurant.distance > 0;
+    const walkMin = hasDistance ? Math.ceil(restaurant.distance / 80) : 0;
+    const carMin  = hasDistance ? Math.ceil(restaurant.distance / 300) : 0;
+    const timeText = hasDistance
+      ? (walkMin <= 20
+          ? `🚶 도보 약 <b>${walkMin}분</b>`
+          : `🚶 도보 ${walkMin}분 &nbsp;|&nbsp; 🚗 차량 약 <b>${carMin}분</b>`)
+      : `위치 확인 필요`;
+    const distanceText = hasDistance ? `${restaurant.distance}m` : `- m`;
 
     card.innerHTML = `
       <div class="card-header-row">
@@ -879,7 +908,7 @@ function renderRestaurantList() {
             <i class="${isFav ? 'fa-solid fa-star' : 'fa-regular fa-star'}"></i>
           </button>
           <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;">
-            <span class="card-distance"><i class="fa-solid fa-person-walking"></i> ${restaurant.distance}m</span>
+            <span class="card-distance"><i class="fa-solid fa-person-walking"></i> ${distanceText}</span>
             <span style="font-size:0.72rem;color:var(--text-muted);">${timeText}</span>
           </div>
         </div>
@@ -932,9 +961,9 @@ function renderRestaurantList() {
       const rLng = e.currentTarget.getAttribute('data-lng');
       const rName = e.currentTarget.getAttribute('data-name');
 
-      // 출발지: 실제 GPS 좌표 (state.gpsCoords) 사용
-      const fromLat = state.gpsCoords.lat;
-      const fromLng = state.gpsCoords.lng;
+      // 출발지: 실제 GPS 좌표 (state.gpsCoords) 사용, 없으면 현재 지도 중심 좌표 사용
+      const fromLat = state.gpsCoords ? state.gpsCoords.lat : state.currentCoords.lat;
+      const fromLng = state.gpsCoords ? state.gpsCoords.lng : state.currentCoords.lng;
 
       // 카카오맵 길찾기 URL (출발지 → 목적지)
       // 모바일 앱 딥링크: kakaomap://route?sp={lat},{lng}&ep={lat},{lng}&by=FOOT
@@ -1221,4 +1250,107 @@ function toggleFavoriteRestaurant(restaurant) {
   saveFavoriteRestaurants();
   renderFavoriteRestaurantsUI();
   renderRestaurantList();
+}
+
+// ============================================================
+// 추가된 헬퍼 함수: 버전 토글 & 로컬 static 맛집 데이터 로드
+// ============================================================
+async function loadStaticRestaurants() {
+  showLoading(true);
+  try {
+    const response = await fetch('restaurants_static.json');
+    const data = await response.json();
+    
+    state.restaurants = data.map(item => {
+      let distance = 0;
+      if (state.gpsCoords) {
+        distance = Math.round(calculateDistance(state.gpsCoords.lat, state.gpsCoords.lng, item.lat, item.lng));
+      }
+      return {
+        id: item.id,
+        name: item.name,
+        category: item.category,
+        lat: item.lat,
+        lng: item.lng,
+        distance: distance,
+        rating: item.rating || parseFloat((4.0 + Math.random() * 1.0).toFixed(1)),
+        reviews: item.reviews || Math.floor(Math.random() * 180) + 6,
+        telephone: item.telephone || '정보 없음',
+        address: item.address || '주소 정보 없음',
+        source: 'static'
+      };
+    });
+    
+    postFetchProcess();
+  } catch (error) {
+    console.error('Failed to load static restaurants:', error);
+    showToast('⚠️ 로컬 맛집 데이터를 불러오지 못했습니다.', 'error');
+  } finally {
+    showLoading(false);
+  }
+}
+
+function switchVersion(version) {
+  if (state.currentVersion === version) return;
+  state.currentVersion = version;
+
+  const btnV1 = document.getElementById('btn-version-1');
+  const btnV2 = document.getElementById('btn-version-2');
+  
+  if (btnV1 && btnV2) {
+    if (version === 1) {
+      btnV1.classList.add('active');
+      btnV2.classList.remove('active');
+      showToast('<i class="fa-solid fa-location-crosshairs"></i>&nbsp; 버전 1 (실시간 GPS 탐색) 활성화!', 'success');
+    } else {
+      btnV1.classList.remove('active');
+      btnV2.classList.add('active');
+      showToast('<i class="fa-solid fa-map-location-dot"></i>&nbsp; 버전 2 (주례·냉정 맛집 리스트) 활성화!', 'success');
+    }
+  }
+
+  // 기존 음식점 마커 지우기
+  state.restaurantMarkers.forEach(marker => marker.setMap(null));
+  state.restaurantMarkers = [];
+
+  if (activeInfoWindow) {
+    activeInfoWindow.close();
+  }
+
+  if (version === 2) {
+    loadStaticRestaurants();
+  } else {
+    // 버전 1: 실시간 GPS 탐색
+    if (state.gpsCoords) {
+      // GPS 좌표가 있으면 즉시 탐색
+      fetchNearbyRestaurants();
+    } else {
+      // GPS 좌표가 없으면 리스트 비우고 GPS 켜달라는 안내
+      state.restaurants = [];
+      renderRestaurantList();
+      updateMapMarkers();
+      showToast('📍 [현재 위치 탐색하기] 버튼을 눌러 GPS 위치를 설정해 주세요.', 'lock', 3500);
+      
+      // GPS 서클 및 마커도 제거 (GPS 기준 원으로만 움직여야 하므로)
+      if (state.userMarker) {
+        state.userMarker.setMap(null);
+        state.userMarker = null;
+      }
+      if (state.radiusCircle) {
+        state.radiusCircle.setMap(null);
+        state.radiusCircle = null;
+      }
+      
+      DOM.geoStatusText.className = 'geo-status';
+      DOM.geoStatusText.innerHTML = `<i class="fa-solid fa-location-dot"></i> GPS 위치를 확인해 주세요.`;
+    }
+  }
+}
+
+function recalculateStaticDistances() {
+  if (!state.gpsCoords) return;
+  state.restaurants.forEach(r => {
+    r.distance = Math.round(calculateDistance(state.gpsCoords.lat, state.gpsCoords.lng, r.lat, r.lng));
+  });
+  postFetchProcess();
 }
