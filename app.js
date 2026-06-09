@@ -112,6 +112,9 @@ document.addEventListener('DOMContentLoaded', () => {
     state.selectedCategories.add('한식');
     state.selectedCategories.add('일식');
     updateCategoryChipsUI();
+    
+    // 시작 시 자동 탐색 (버전 2 요구사항)
+    fetchNearbyRestaurants();
   });
 });
 
@@ -211,8 +214,8 @@ function initMap() {
   const zoomControl = new kakao.maps.ZoomControl();
   state.map.addControl(zoomControl, kakao.maps.ControlPosition.RIGHT);
 
-  // 현재 사용자 기준 위치 오버레이 (초록 원형 펄스 형태)
-  const userContent = `<div class="custom-user-marker"><div class="pulse-marker"></div><div class="center-marker" style="background-color: #10b981;"></div></div>`;
+  // 현재 사용자 기준 위치 오버레이 (파란색 원형 펄스 형태)
+  const userContent = `<div class="custom-user-marker"><div class="pulse-marker" style="border-color: rgba(59, 130, 246, 0.5);"></div><div class="center-marker" style="background-color: #3b82f6; box-shadow: 0 0 10px rgba(59, 130, 246, 0.6);"></div></div>`;
   state.userMarker = new kakao.maps.CustomOverlay({
     position: centerPosition,
     content: userContent,
@@ -226,10 +229,10 @@ function initMap() {
     center: centerPosition,
     radius: state.searchRadius,
     strokeWeight: 1.5,
-    strokeColor: '#10b981',
+    strokeColor: '#3b82f6',
     strokeOpacity: 0.7,
     strokeStyle: 'dash',
-    fillColor: '#10b981',
+    fillColor: '#3b82f6',
     fillOpacity: 0.08
   });
   state.radiusCircle.setMap(state.map);
@@ -270,6 +273,8 @@ function setupEventListeners() {
   DOM.btnGetLocation.addEventListener('click', handleGetLocation);
   DOM.btnLockLocation.addEventListener('click', toggleLocationLock);
 
+  // 주변 검색 버튼 이벤트 제거
+
   DOM.inputRadius.addEventListener('input', (e) => {
     const radius = parseInt(e.target.value);
     state.searchRadius = radius;
@@ -289,10 +294,12 @@ function setupEventListeners() {
         state.selectedCategories.add(category);
       }
       updateCategoryChipsUI();
-      
-      // API를 재조회하지 않고, 메모리에 저장된 데이터로 즉시 화면 필터링만 수행
-      if (state.lastSearchCoords.lat !== 0 || state.restaurants.length > 0) {
+
+      // 이미 검색 결과가 있으면 즉시 재필터링, 없으면 자동 검색
+      if (state.restaurants.length > 0) {
         postFetchProcess();
+      } else {
+        fetchNearbyRestaurants();
       }
     });
   });
@@ -548,14 +555,14 @@ function updateLocationCoords(lat, lng, isGPS = false) {
   DOM.coordsDisplay.classList.remove('hidden');
   DOM.geoStatusText.className = 'geo-status success';
   DOM.geoStatusText.innerHTML = isGPS
-    ? `<i class="fa-solid fa-circle-check"></i> GPS 위치 확인 완료 (자동)`
-    : `<i class="fa-solid fa-map-pin"></i> 탐색 기준 위치 설정 완료 (수동)`;
+    ? `<i class="fa-solid fa-circle-check"></i> GPS 위치 확인 — [주변 검색하기] 버튼을 눌러주세요`
+    : `<i class="fa-solid fa-map-pin"></i> 위치 설정 완료 — [주변 검색하기]를 눌러주세요`;
   DOM.btnGetLocation.disabled = false;
 
   if (state.map) {
     const newPos = new kakao.maps.LatLng(lat, lng);
-    state.map.setCenter(newPos);
-    
+    state.map.panTo(newPos);
+
     if (state.userMarker) {
       state.userMarker.setPosition(newPos);
       openUserMarkerInfoWindow(isGPS);
@@ -566,6 +573,7 @@ function updateLocationCoords(lat, lng, isGPS = false) {
     }
   }
 
+  // 위치가 변경되면 바로 탐색
   fetchNearbyRestaurants();
 }
 
@@ -637,51 +645,58 @@ function searchPlacesPromise(keyword, lat, lng, radius) {
 }
 
 async function fetchNearbyRestaurants() {
+  if (!state.map) {
+    showToast('⚠️ 지도가 에 로드되지 않았습니다. 쟠시 후 다시 시도해 주세요.', 'lock', 2500);
+    return;
+  }
   showLoading(true);
-  
+
   state.lastSearchCoords.lat = state.currentCoords.lat;
   state.lastSearchCoords.lng = state.currentCoords.lng;
-  
+
   const { lat, lng } = state.currentCoords;
   const radius = state.searchRadius;
-  
-  try {
-    // 1. 역지오코딩으로 현재 탐색 주소 획득
-    const locationName = await getRegionNameFromCoords(lat, lng);
-    const addressDetail = await getAddressFromCoords(lat, lng);
-    
-    DOM.geoStatusText.className = 'geo-status success';
-    DOM.geoStatusText.innerHTML = `<i class="fa-solid fa-circle-check"></i> ${addressDetail.split(' ').slice(0,3).join(' ')}`;
-    showToast(`<i class="fa-solid fa-earth-asia"></i>&nbsp; ${locationName} 주변 맛집 수집 중...`, 'success', 2200);
 
-    // ① 카카오 음식점 카테고리(FD6) 전체 검색 + ② 카테고리별 키워드 병렬 검색
-    const categorySearches = [
-      // 카카오 공식 카테고리 코드 FD6 = 음식점
-      { category: null, keyword: null, isCategory: true },
-      // 키워드별 세부 검색
-      { category: '한식', keyword: '한식' },
-      { category: '중식', keyword: '중국집' },
-      { category: '일식', keyword: '일식' },
-      { category: '분식', keyword: '분식' },
-      { category: '치킨', keyword: '치킨' },
-      { category: '피자', keyword: '피자' },
-      { category: '햄버거', keyword: '버거' }
+  try {
+    // 주소 디스플레이
+    const locationName = await getRegionNameFromCoords(lat, lng);
+    const addressDetail  = await getAddressFromCoords(lat, lng);
+    DOM.geoStatusText.className = 'geo-status success';
+    DOM.geoStatusText.innerHTML =
+      `<i class="fa-solid fa-circle-check"></i> ${addressDetail.split(' ').slice(0, 3).join(' ')} 탐색 완료`;
+    showToast(
+      `<i class="fa-solid fa-earth-asia"></i>&nbsp; ${locationName} 주변 맛집 수집 중...`,
+      'success', 2500
+    );
+
+    // 단일 Places 인스턴스 재사용
+    const ps = new kakao.maps.services.Places();
+    const location = new kakao.maps.LatLng(lat, lng);
+    const baseOpts = { location, radius, sort: kakao.maps.services.SortBy.DISTANCE, size: 15 };
+
+    // ① FD6 카테고리 코드 검색 (반경 내 전체 음식점)
+    const fd6Docs = await new Promise(resolve => {
+      ps.categorySearch('FD6', (data, status) => {
+        resolve(status === kakao.maps.services.Status.OK ? (data || []) : []);
+      }, baseOpts);
+    });
+
+    // ② 카테고리별 키워드 검색 (대표 키워드로 FD6를 보완)
+    const keywordMap = [
+      { cat: '한식',  kw: '한식 식당' },
+      { cat: '중식',  kw: '중국집'  },
+      { cat: '일식',  kw: '일식당'  },
+      { cat: '분식',  kw: '분식점'  },
+      { cat: '치킨',  kw: '치킨'     },
+      { cat: '피자',  kw: '피자'     },
+      { cat: '햄버거', kw: '버거'     }
     ];
 
-    // 카카오 카테고리 코드(FD6) 검색 함수
-    function searchByCategory(lat, lng, radius) {
-      return new Promise((resolve) => {
-        const ps = new kakao.maps.services.Places();
-        ps.categorySearch('FD6', function(data, status) {
-          resolve(status === kakao.maps.services.Status.OK ? (data || []) : []);
-        }, {
-          location: new kakao.maps.LatLng(lat, lng),
-          radius: radius,
-          sort: kakao.maps.services.SortBy.DISTANCE,
-          size: 15
-        });
-      });
-    }
+    const keywordResults = await Promise.all(
+      keywordMap.map(({ cat, kw }) =>
+        searchPlacesPromise(kw, lat, lng, radius).then(docs => ({ category: cat, docs }))
+      )
+    );
 
     const allRestaurants = [];
     const addedIds = new Set();
@@ -693,7 +708,6 @@ async function fetchNearbyRestaurants() {
 
       const itemLat = parseFloat(doc.y);
       const itemLng = parseFloat(doc.x);
-      // doc.distance는 카카오 API가 반환 (이미 radius 내 결과만 반환)
       const distance = parseInt(doc.distance) || Math.round(calculateDistance(lat, lng, itemLat, itemLng));
 
       // 카테고리 추론 (FD6 결과는 category_name으로 추론)
@@ -725,16 +739,8 @@ async function fetchNearbyRestaurants() {
       });
     }
 
-    // FD6 카테고리 검색 + 키워드 검색 동시 실행
-    const [categoryDocs, ...keywordResults] = await Promise.all([
-      searchByCategory(lat, lng, radius),
-      ...categorySearches.slice(1).map(({ category, keyword }) =>
-        searchPlacesPromise(keyword, lat, lng, radius).then(docs => ({ category, docs }))
-      )
-    ]);
-
     // FD6 결과 먼저 추가 (카테고리 없음 → 추론)
-    categoryDocs.forEach(doc => addDoc(doc, null));
+    fd6Docs.forEach(doc => addDoc(doc, null));
 
     // 키워드 결과 추가
     keywordResults.forEach(({ category, docs }) => {
@@ -975,10 +981,10 @@ function updateMapMarkers() {
     const meta = categoryMetadata[restaurant.category];
     const markerPosition = new kakao.maps.LatLng(restaurant.lat, restaurant.lng);
     
-    // 커스텀 마커 HTML 구성
+    // 커스텀 마커 HTML 구성 (그림/이모지 표시)
     const markerContent = document.createElement('div');
     markerContent.className = 'custom-restaurant-marker';
-    markerContent.innerHTML = `<div class="restaurant-pin" style="background-color: ${meta.color}; border-color: #fff;"><i class="fa-solid ${meta.icon}"></i></div>`;
+    markerContent.innerHTML = `<div class="restaurant-pin" style="background-color: ${meta.color}; border-color: #fff; display: flex; justify-content: center; align-items: center; font-size: 1.1rem; width: 36px; height: 36px; border-radius: 50%; box-shadow: 0 4px 6px rgba(0,0,0,0.1);"><span style="margin-top:2px;">${meta.emoji}</span></div>`;
     
     const marker = new kakao.maps.CustomOverlay({
       position: markerPosition,

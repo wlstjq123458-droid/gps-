@@ -327,6 +327,55 @@ body.naver-mode .btn-primary {
   transform: translateY(0);
 }
 
+/* 주변 검색하기 버튼 */
+.btn-search-nearby {
+  width: 100%;
+  background: linear-gradient(135deg, #f97316 0%, #ea580c 100%);
+  border: none;
+  color: #fff;
+  padding: 14px 20px;
+  font-family: var(--font-main);
+  font-size: 1rem;
+  font-weight: 700;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  box-shadow: 0 4px 16px rgba(249, 115, 22, 0.35);
+  transition: all var(--transition-normal);
+  letter-spacing: 0.01em;
+}
+
+.btn-search-nearby:hover:not(:disabled) {
+  transform: translateY(-2px);
+  filter: brightness(1.12);
+  box-shadow: 0 6px 20px rgba(249, 115, 22, 0.45);
+}
+
+.btn-search-nearby:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.btn-search-nearby:disabled {
+  background: linear-gradient(135deg, #d1d5db 0%, #9ca3af 100%);
+  box-shadow: none;
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* 검색 준비 완료 상태 (펄스 애니메이션) */
+.btn-search-nearby.ready {
+  animation: searchPulse 1.8s ease-in-out infinite;
+}
+
+@keyframes searchPulse {
+  0%, 100% { box-shadow: 0 4px 16px rgba(249, 115, 22, 0.35); }
+  50%       { box-shadow: 0 4px 28px rgba(249, 115, 22, 0.7); }
+}
+
+
 .coords-display {
   display: flex;
   justify-content: space-between;
